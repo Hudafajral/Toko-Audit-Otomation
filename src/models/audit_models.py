@@ -1,7 +1,7 @@
 """
 src/models/audit_models.py
-Skema Database Relasional Toko Rina:
-Pelanggan, Piutang, Transaksi Kas Itemized, Mutasi Bank, Akun User & Izin Akses (dengan Status Approval & Lokasi GPS/IP),
+Skema Database Relasional Toko Rina (Multi-Store Ready):
+Pelanggan, Piutang, Transaksi Kas Itemized, Mutasi Bank, Akun User & Izin Akses (dengan Status Approval, Toko Tugas, & Lokasi GPS/IP),
 Log Audit, Setting ML + Saldo Awal, dan Perpustakaan Dokumen.
 """
 from datetime import datetime
@@ -19,12 +19,17 @@ class User(Base):
     id = Column(Integer, primary_key=True, index=True)
     username = Column(String(50), unique=True, nullable=False)
     password_hash = Column(String(128), nullable=False)
-    role = Column(String(20), default="kasir")
+    role = Column(String(20), default="kasir")  # 'admin' atau 'kasir'
+    
+    # Penugasan toko ('toko1', 'toko2', 'toko3', atau '*' untuk admin)
+    assigned_store = Column(String(20), default="toko3")
+    
     status_approval = Column(String(20), default="APPROVED")  # 'PENDING', 'APPROVED', 'REJECTED'
     registered_ip = Column(String(50), default="127.0.0.1")
     registered_location = Column(String(255), default="Lokal / Internal")
     latitude = Column(Float, nullable=True)
     longitude = Column(Float, nullable=True)
+    
     # Daftar tab fitur yang diizinkan (format JSON list string)
     allowed_tabs = Column(Text, default='["homeDashboardTab","auditFormTab","docLibraryTab","piutangTab"]')
     created_at = Column(DateTime, default=datetime.utcnow)

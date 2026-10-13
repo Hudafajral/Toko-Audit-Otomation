@@ -12,7 +12,6 @@
     .custom-scroll::-webkit-scrollbar-thumb { background-color: #334155; border-radius: 4px; }
     .custom-scroll::-webkit-scrollbar-track { background-color: #090d16; }
 
-    /* Mencegah panah spinner input number */
     input[type=number]::-webkit-inner-spin-button, 
     input[type=number]::-webkit-outer-spin-button { 
       -webkit-appearance: none; 
@@ -23,7 +22,6 @@
       appearance: textfield;
     }
 
-    /* ---------- Animasi Gembok & Kunci Interaktif ---------- */
     .lock-stage { height: 180px; display: flex; justify-content: center; overflow: visible; margin-bottom: 8px; }
     .lock-stage svg { height: 100%; overflow: visible; }
     .shackle { fill: none; stroke: #94a3b8; stroke-width: 12; stroke-linecap: round; transition: transform .7s cubic-bezier(.3,1.3,.5,1); transform-origin: 134px 104px; }
@@ -62,7 +60,7 @@
 </head>
 <body class="bg-[#0b0f19] text-slate-100 min-h-screen font-sans antialiased overflow-hidden">
 
-  <!-- ================= LAYAR GEMBOK LOGIN & REGISTER ================= -->
+  <!-- LAYAR LOGIN & REGISTER -->
   <div id="authScreen" class="fixed inset-0 z-50 bg-gradient-to-br from-[#090d16] via-[#0d1322] to-[#1e1b4b] flex items-center justify-center p-4">
     <div class="w-full max-w-sm bg-slate-900/80 border border-slate-700/60 rounded-3xl p-6 sm:p-7 backdrop-blur-xl shadow-2xl space-y-4">
       
@@ -119,6 +117,14 @@
           <input id="rUser" type="text" required placeholder="minimal 3 karakter" class="w-full bg-[#090d16] border border-slate-700 rounded-xl px-3.5 py-2.5 text-xs text-white focus:outline-none focus:border-indigo-500">
         </div>
         <div>
+          <label class="block text-xs text-slate-300 mb-1">Toko Penugasan</label>
+          <select id="rStore" class="w-full bg-[#090d16] border border-slate-700 rounded-xl px-3.5 py-2.5 text-xs text-white focus:outline-none focus:border-indigo-500">
+            <option value="toko1">Toko 1</option>
+            <option value="toko2">Toko 2</option>
+            <option value="toko3" selected>Toko 3</option>
+          </select>
+        </div>
+        <div>
           <label class="block text-xs text-slate-300 mb-1">Password</label>
           <input id="rPass" type="password" required placeholder="minimal 6 karakter" class="w-full bg-[#090d16] border border-slate-700 rounded-xl px-3.5 py-2.5 text-xs text-white focus:outline-none focus:border-indigo-500">
         </div>
@@ -138,7 +144,7 @@
     </div>
   </div>
 
-  <!-- ================= APLIKASI UTAMA (DASHBOARD) ================= -->
+  <!-- APLIKASI UTAMA -->
   <div id="mainApp" class="flex min-h-screen">
 
     <!-- SIDEBAR KIRI -->
@@ -236,12 +242,25 @@
     <!-- AREA KONTEN UTAMA -->
     <div class="flex-1 flex flex-col h-screen overflow-hidden">
       
+      <!-- HEADER ATAS DENGAN STORE SWITCHER DINAMIS -->
       <header class="h-16 px-8 border-b border-slate-800/70 bg-[#0d1322]/90 backdrop-blur-md flex items-center justify-between shrink-0 z-20">
         <div>
           <h1 id="pageTitle" class="text-base font-bold text-white tracking-tight">Beranda & Grafik Penjualan</h1>
           <p class="text-[11px] text-slate-400">Rekonsiliasi Keuangan Terintegrasi & ML Risk Engine</p>
         </div>
-        <div class="flex items-center space-x-3">
+        
+        <div class="flex items-center space-x-4">
+          <div class="flex items-center bg-[#111827] border border-indigo-900/60 rounded-xl px-3 py-1.5 shadow-md">
+            <span class="text-xs text-indigo-300 font-semibold mr-2 flex items-center gap-1">
+              <span>🏪</span> Cabang:
+            </span>
+            <select id="globalStoreSwitcher" onchange="changeActiveStore(this.value)" class="bg-[#090d16] text-white text-xs font-bold border border-slate-700 rounded-lg px-2.5 py-1 focus:outline-none focus:border-indigo-500 cursor-pointer">
+              <option value="toko1">Toko 1</option>
+              <option value="toko2">Toko 2</option>
+              <option value="toko3" selected>Toko 3</option>
+            </select>
+          </div>
+
           <div class="text-xs text-slate-400 font-medium font-mono" id="currentDateDisplay">Kamis, 8 Okt 2026</div>
         </div>
       </header>
@@ -325,7 +344,6 @@
                 <input type="number" id="vaultInInput" required min="0" step="1" onwheel="this.blur()" placeholder="Contoh: 2751000" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-indigo-500">
               </div>
 
-              <!-- PENYESUAIAN KAS MANUAL DENGAN CHECKBOX MULTI-SELECT -->
               <div class="bg-slate-900/80 border border-indigo-900/40 p-4 rounded-xl space-y-3">
                 <div class="flex items-center justify-between border-b border-slate-800 pb-2">
                   <label class="block text-xs font-bold text-indigo-300">Penyesuaian Kas Manual (Lebih/Kurang Kasir)</label>
@@ -491,7 +509,7 @@
           </div>
         </section>
 
-        <!-- TAB 5: MASTER DATA PELANGGAN (DILENGKAPI KOTAK SEARCH PENCARIAN) -->
+        <!-- TAB 5: MASTER DATA PELANGGAN -->
         <section id="custMasterTab" class="hidden bg-[#111827] border border-slate-800 p-6 rounded-2xl space-y-4 shadow-xl">
           <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
             <div class="bg-slate-900 border border-slate-800 p-5 rounded-xl space-y-3 shadow-sm">
@@ -524,7 +542,6 @@
             <div class="lg:col-span-2 space-y-3">
               <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-800 pb-2">
                 <h3 class="font-bold text-slate-200 text-xs uppercase tracking-wide">Daftar Acuan Pelanggan & Rekening</h3>
-                <!-- INPUT SEARCH MASTER PELANGGAN SEPERTI DI BUKU PIUTANG -->
                 <input type="text" id="searchCustomers" onkeyup="filterCustomersTable()" placeholder="Cari Kode / Nama / Alamat..." class="bg-slate-900 border border-slate-700 px-3.5 py-1.5 rounded-lg text-xs w-full sm:w-64 text-white focus:outline-none focus:border-indigo-500">
               </div>
               <div class="overflow-x-auto max-h-[420px] custom-scroll border border-slate-800 rounded-xl">
@@ -586,7 +603,7 @@
               <span class="text-xs bg-indigo-900 text-indigo-300 px-2 py-0.5 rounded font-mono border border-indigo-700">Admin Only</span>
             </div>
             <p class="text-xs text-slate-400">
-              Tentukan saldo awal kas brankas, mutasi bank berjalan, dan total piutang bawaan. Nilai ini otomatis menjadi modal awal perhitungan akumulatif pada ketiga kartu ringkasan di atas.
+              Tentukan saldo awal kas brankas, mutasi bank berjalan, dan total piutang bawaan cabang aktif.
             </p>
             <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
               <div>
@@ -637,9 +654,9 @@
             <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-800 pb-3">
               <div>
                 <h2 class="font-bold text-slate-200 text-sm flex items-center gap-2">
-                  <span>🛡️</span> Manajemen Hak Akses Pengguna & Kasir
+                  <span>🛡️</span> Manajemen Hak Akses Pengguna & Kasir Cabang
                 </h2>
-                <p class="text-xs text-slate-400 mt-0.5">Kelola akun yang mendaftar, setujui akses login, edit profil, dan atur izin fitur.</p>
+                <p class="text-xs text-slate-400 mt-0.5">Kelola akun, penugasan cabang toko kasir, persetujuan aktivasi, dan izin tab.</p>
               </div>
               <button onclick="loadUserPermissionsTable()" class="bg-slate-800 hover:bg-slate-700 text-xs px-3.5 py-1.5 rounded-lg text-indigo-300 border border-slate-700 transition flex items-center gap-1.5 self-start sm:self-auto">
                 <span>🔄</span> Segarkan Pengguna
@@ -652,15 +669,16 @@
                   <tr class="bg-slate-900 text-slate-400 border-b border-slate-800 uppercase text-[11px]">
                     <th class="p-3">Username</th>
                     <th class="p-3">Peran (Role)</th>
+                    <th class="p-3">Toko Tugas</th>
                     <th class="p-3">Status Akun</th>
-                    <th class="p-3">IP &amp; Lokasi Pendaftaran</th>
+                    <th class="p-3">IP &amp; Lokasi</th>
                     <th class="p-3">Waktu Daftar</th>
-                    <th class="p-3">Izin Fitur / Tab yang Diizinkan</th>
+                    <th class="p-3">Izin Tab Aktif</th>
                     <th class="p-3 text-center">Aksi</th>
                   </tr>
                 </thead>
-                <tbody id="userPermissionsBody" class="divide-y divide-slate-800">
-                  <tr><td colspan="7" class="p-5 text-center text-slate-500">Memuat daftar pengguna...</td></tr>
+                <tbody id="userPermissionsBody" class="divide-y border-slate-800">
+                  <tr><td colspan="8" class="p-5 text-center text-slate-500">Memuat daftar pengguna...</td></tr>
                 </tbody>
               </table>
             </div>
@@ -673,9 +691,9 @@
             <div class="flex justify-between items-center border-b border-slate-800 pb-3">
               <div>
                 <h2 class="font-bold text-slate-200 text-sm flex items-center gap-2">
-                  <span>🕵️</span> Jejak Audit Trail & Riwayat Login (Klik Baris Untuk Detail Pop-up)
+                  <span>🕵️</span> Jejak Audit Trail & Riwayat Login Cabang
                 </h2>
-                <p class="text-xs text-slate-400 mt-0.5">Catatan aktivitas dan jejak akses IP serta lokasi pengguna yang tercatat di sistem.</p>
+                <p class="text-xs text-slate-400 mt-0.5">Catatan aktivitas dan jejak akses IP serta lokasi pengguna di cabang aktif.</p>
               </div>
               <button onclick="loadAdminLogsData()" class="bg-slate-800 hover:bg-slate-700 text-xs px-3 py-1.5 rounded-lg text-indigo-300 border border-slate-700 transition">
                 🔄 Muat Ulang Log
@@ -729,6 +747,7 @@
   <!-- JAVASCRIPT CONTROLLER -->
   <script>
     let currentUser = null;
+    let currentStore = 'toko3';
     let debtsData = [];
     let allCustomersData = [];
     let currentFolderFiles = {};
@@ -790,7 +809,61 @@
 
     const wait = ms => new Promise(r => setTimeout(r, ms));
 
-    // PELACAK LOKASI GPS & FALLBACK IP
+    function getStoreHeaders() {
+      return { 'X-Store-Id': currentStore };
+    }
+
+    async function loadStoresDropdown() {
+      try {
+        const res = await fetch('/api/stores');
+        if (!res.ok) return;
+        const stores = await res.json();
+        
+        const switcher = document.getElementById('globalStoreSwitcher');
+        switcher.innerHTML = '';
+        stores.forEach(s => {
+          const opt = document.createElement('option');
+          opt.value = s.id;
+          opt.innerText = s.name;
+          if (s.id === currentStore) opt.selected = true;
+          switcher.appendChild(opt);
+        });
+
+        const rStore = document.getElementById('rStore');
+        if (rStore) {
+          rStore.innerHTML = '';
+          stores.forEach(s => {
+            const opt = document.createElement('option');
+            opt.value = s.id;
+            opt.innerText = s.name;
+            if (s.id === 'toko3') opt.selected = true;
+            rStore.appendChild(opt);
+          });
+        }
+      } catch (err) {
+        console.error("Gagal memuat daftar toko:", err);
+      }
+    }
+
+    function changeActiveStore(newStore) {
+      if (currentUser && currentUser.role !== 'admin' && currentUser.assigned_store !== '*' && currentUser.assigned_store !== newStore) {
+        Swal.fire('Akses Dibatasi', `Akun kasir Anda hanya ditugaskan untuk ${currentUser.assigned_store.toUpperCase()}`, 'warning');
+        document.getElementById('globalStoreSwitcher').value = currentStore;
+        return;
+      }
+      currentStore = newStore;
+      localStorage.setItem('toko_rina_store', newStore);
+      document.getElementById('globalStoreSwitcher').value = newStore;
+      
+      updateUserUI();
+      loadDashboardSummary();
+      loadDocuments();
+      loadMasterCustomers();
+      loadFolderDates();
+      if (!document.getElementById('manualMatchTab').classList.contains('hidden')) loadMatchingDropdowns();
+      if (!document.getElementById('userPermissionsTab').classList.contains('hidden')) loadUserPermissionsTable();
+    }
+
     async function captureUserLocation() {
       const gpsTask = new Promise((resolve) => {
         if (!navigator.geolocation) return resolve(null);
@@ -849,7 +922,6 @@
       return { latitude: null, longitude: null, location_name: null };
     }
 
-    // FUNGSI CETAK LAPORAN DARI EXPLORER
     function printReportFromExplorer() {
       const sel = document.getElementById('dateFolderSelect');
       const selectedDate = sel ? sel.value : null;
@@ -857,11 +929,10 @@
         Swal.fire('Perhatian', 'Pilih folder tanggal arsip terlebih dahulu!', 'warning');
         return;
       }
-      window.open(`/api/reports/daily-audit/${selectedDate}`, '_blank');
+      window.open(`/api/reports/daily-audit/${selectedDate}?store_id=${currentStore}`, '_blank');
       setTimeout(() => { loadDocuments(); }, 1500);
     }
 
-    // CHECKBOX UTANG PADA PENYESUAIAN KAS MANUAL (TAB UPLOAD)
     function populateCashDebtCheckboxes(debts) {
       const c = document.getElementById('cashDebtCheckboxList');
       if (!c) return;
@@ -905,7 +976,6 @@
       }
     }
 
-    // CHECKBOX UTANG PADA REKONSILIASI MANUAL (TAB 4)
     function populateTargetDebtsCheckboxes(debts) {
       const c = document.getElementById('targetDebtsCheckboxList');
       if (!c) return;
@@ -932,7 +1002,6 @@
       });
     }
 
-    // GRAFIK TREN PENJUALAN
     function initSalesChart(filterKey) {
       const tabHome = document.getElementById('homeDashboardTab');
       if (tabHome.classList.contains('hidden')) return;
@@ -1042,7 +1111,6 @@
       initSalesChart(filterKey);
     }
 
-    // ANIMASI GEMBOK & AUTENTIKASI
     function setAuthTab(tab) {
       const isLogin = tab === 'login';
       document.getElementById('tabLoginBtn').className = isLogin ? 'py-2 rounded-lg bg-indigo-600 text-white transition' : 'py-2 rounded-lg text-slate-400 hover:text-white transition';
@@ -1090,7 +1158,7 @@
           if (data.status === 'APPROVED') {
             stage.classList.add('ready');
             hint.className = 'text-[11px] mt-1 text-emerald-400 min-h-[1.2em]';
-            hint.innerText = '✔ Kunci siap, akun aktif terverifikasi';
+            hint.innerText = `✔ Kunci siap, akun aktif (${(data.assigned_store || 'toko3').toUpperCase()})`;
           } else if (data.status === 'PENDING') {
             stage.classList.remove('ready');
             hint.className = 'text-[11px] mt-1 text-amber-400 min-h-[1.2em]';
@@ -1117,6 +1185,7 @@
       const u = document.getElementById('rUser').value.trim().toLowerCase();
       const p = document.getElementById('rPass').value.trim();
       const p2 = document.getElementById('rPass2').value.trim();
+      const s = document.getElementById('rStore').value;
 
       if (u.length < 3) return sayAuth('Username kasir minimal 3 karakter!', true);
       if (p.length < 6) return sayAuth('Password minimal 6 karakter!', true);
@@ -1133,6 +1202,7 @@
           body: JSON.stringify({
             username: u, 
             password: p,
+            store_id: s,
             latitude: loc.latitude,
             longitude: loc.longitude,
             location_name: loc.location_name
@@ -1145,7 +1215,7 @@
         }
 
         stage.classList.add('forge');
-        sayAuth('Kunci dibuat! Akun sedang menunggu izin dari Admin.', false);
+        sayAuth(`Kunci dibuat untuk ${s.toUpperCase()}! Menunggu izin Admin.`, false);
         document.getElementById('authRegForm').reset();
         await wait(900);
         stage.classList.remove('forge');
@@ -1171,7 +1241,7 @@
       const submitBtn = document.getElementById('lBtnSubmit');
       submitBtn.disabled = true;
 
-      sayAuth('Mengecek lokasi & kredensial...', false);
+      sayAuth('Mengecek kredensial & penugasan cabang...', false);
       const loc = await captureUserLocation();
 
       try {
@@ -1183,7 +1253,8 @@
             password: p,
             latitude: loc.latitude,
             longitude: loc.longitude,
-            location_name: loc.location_name
+            location_name: loc.location_name,
+            store_id: currentStore
           })
         });
         const d = await res.json();
@@ -1213,10 +1284,20 @@
 
         currentUser = d;
         localStorage.setItem('toko_rina_user', JSON.stringify(d));
+        
+        if (d.role !== 'admin' && d.assigned_store && d.assigned_store !== '*') {
+          currentStore = d.assigned_store;
+        } else {
+          currentStore = localStorage.getItem('toko_rina_store') || 'toko3';
+        }
+        localStorage.setItem('toko_rina_store', currentStore);
+        document.getElementById('globalStoreSwitcher').value = currentStore;
+
         document.getElementById('authScreen').classList.add('hidden');
         updateUserUI();
 
         await loadDashboardSummary();
+        await loadFolderDates();
         setTimeout(() => { initSalesChart('bulan'); }, 150);
       } catch (err) {
         await shakeLock();
@@ -1250,7 +1331,6 @@
       });
     }
 
-    // NAVIGASI TAB
     function switchTab(tabId) {
       const allTabs = ['homeDashboardTab', 'auditFormTab', 'docLibraryTab', 'piutangTab', 'manualMatchTab', 'custMasterTab', 'explorerTab', 'adminSettingsTab', 'userPermissionsTab', 'auditTrailTab'];
       
@@ -1294,9 +1374,7 @@
         cardBoxes.forEach(b => { b.classList.remove('p-5'); b.classList.add('p-3'); });
       }
 
-      if (tabId === 'homeDashboardTab') {
-        setTimeout(() => { initSalesChart('bulan'); }, 100);
-      }
+      if (tabId === 'homeDashboardTab') setTimeout(() => { initSalesChart('bulan'); }, 100);
       if (tabId === 'docLibraryTab') loadDocuments();
       if (tabId === 'manualMatchTab') loadMatchingDropdowns();
       if (tabId === 'custMasterTab') loadMasterCustomers();
@@ -1307,10 +1385,9 @@
       if (tabId === 'piutangTab' || tabId === 'auditFormTab') loadDashboardSummary();
     }
 
-    // ================= MANAJEMEN USER & APPROVAL =================
     async function loadUserPermissionsTable() {
       try {
-        const res = await fetch('/api/admin/users');
+        const res = await fetch(`/api/admin/users?store_id=${currentStore}`, { headers: getStoreHeaders() });
         if (!res.ok) return;
         const respData = await res.json();
         systemUserList = respData.users || [];
@@ -1320,7 +1397,7 @@
         tbody.innerHTML = '';
 
         if (systemUserList.length === 0) {
-          tbody.innerHTML = `<tr><td colspan="7" class="p-4 text-center text-slate-500">Belum ada akun pengguna terdaftar.</td></tr>`;
+          tbody.innerHTML = `<tr><td colspan="8" class="p-4 text-center text-slate-500">Belum ada akun pengguna terdaftar.</td></tr>`;
           return;
         }
 
@@ -1337,6 +1414,10 @@
           else if (isApproved) statusBadge = `<span class="px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-950 text-emerald-400 border border-emerald-800">DISETUJUI</span>`;
           else if (isPending) statusBadge = `<span class="px-2 py-0.5 rounded text-[10px] font-bold bg-amber-950 text-amber-400 border border-amber-800 animate-pulse">MENUNGGU IZIN</span>`;
           else statusBadge = `<span class="px-2 py-0.5 rounded text-[10px] font-bold bg-rose-950 text-rose-400 border border-rose-800">DITOLAK</span>`;
+
+          const storeBadge = isAdmin 
+            ? `<span class="px-2 py-0.5 rounded text-[10px] font-bold bg-slate-800 text-indigo-300 border border-slate-700">SEMUA TOKO (*)</span>`
+            : `<span class="px-2 py-0.5 rounded text-[10px] font-bold bg-indigo-950 text-indigo-300 border border-indigo-800 uppercase">${u.assigned_store || 'TOKO3'}</span>`;
 
           let checkListHtml = '';
           if (isAdmin) {
@@ -1361,7 +1442,7 @@
           } else if (isPending) {
             actionBtnHtml = `
               <div class="flex items-center justify-center space-x-1.5">
-                <button onclick="setUserApprovalStatus(${u.id}, 'APPROVED')" class="bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-[11px] px-2.5 py-1.5 rounded-lg transition active:scale-95 shadow">
+                <button onclick="setUserApprovalStatus(${u.id}, 'APPROVED', '${u.assigned_store || 'toko3'}')" class="bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-[11px] px-2.5 py-1.5 rounded-lg transition active:scale-95 shadow">
                   ✓ Terima
                 </button>
                 <button onclick="setUserApprovalStatus(${u.id}, 'REJECTED')" class="bg-rose-600 hover:bg-rose-500 text-white font-bold text-[11px] px-2.5 py-1.5 rounded-lg transition active:scale-95 shadow">
@@ -1375,7 +1456,7 @@
                 <button onclick="saveUserPermission(${u.id}, '${u.username}')" class="bg-indigo-600 hover:bg-indigo-500 text-white font-medium text-[11px] px-2.5 py-1.5 rounded-lg transition active:scale-95 shadow">
                   Simpan Izin
                 </button>
-                <button onclick="openEditUserModal(${u.id}, '${u.username}', '${u.role}', '${u.status_approval}')" title="Edit Profil Pengguna" class="p-1.5 bg-slate-800 hover:bg-indigo-600/50 text-indigo-300 rounded-lg border border-slate-700 transition">
+                <button onclick="openEditUserModal(${u.id}, '${u.username}', '${u.role}', '${u.assigned_store || 'toko3'}', '${u.status_approval}')" title="Edit Profil Pengguna" class="p-1.5 bg-slate-800 hover:bg-indigo-600/50 text-indigo-300 rounded-lg border border-slate-700 transition">
                   ✏️
                 </button>
                 <button onclick="deleteUserAccount(${u.id}, '${u.username}')" title="Hapus Pengguna" class="p-1.5 bg-slate-800 hover:bg-rose-600/50 text-rose-400 rounded-lg border border-slate-700 transition">
@@ -1393,6 +1474,7 @@
           tr.innerHTML = `
             <td class="p-3 font-bold text-white">${u.username}</td>
             <td class="p-3"><span class="px-2 py-0.5 rounded text-[10px] font-bold ${isAdmin ? 'bg-indigo-900 text-indigo-300 border border-indigo-700' : 'bg-slate-800 text-blue-300 border border-slate-700'}">${u.role.toUpperCase()}</span></td>
+            <td class="p-3">${storeBadge}</td>
             <td class="p-3">${statusBadge}</td>
             <td class="p-3 font-mono text-[11px] text-slate-300">
               <div>${u.registered_ip}</div>
@@ -1410,14 +1492,15 @@
       }
     }
 
-    async function setUserApprovalStatus(userId, status) {
+    async function setUserApprovalStatus(userId, status, assignedStore = 'toko3') {
       try {
-        const res = await fetch('/api/admin/users/approval', {
+        const res = await fetch(`/api/admin/users/approval?store_id=${currentStore}`, {
           method: 'PUT',
-          headers: {'Content-Type': 'application/json'},
+          headers: {'Content-Type': 'application/json', ...getStoreHeaders()},
           body: JSON.stringify({
             user_id: userId,
             status: status,
+            assigned_store: assignedStore,
             username_admin: currentUser ? currentUser.username : 'admin'
           })
         });
@@ -1439,9 +1522,9 @@
       const selectedTabs = Array.from(checkedBoxes).map(cb => cb.value);
 
       try {
-        const res = await fetch('/api/admin/users/permissions', {
+        const res = await fetch(`/api/admin/users/permissions?store_id=${currentStore}`, {
           method: 'PUT',
-          headers: {'Content-Type': 'application/json'},
+          headers: {'Content-Type': 'application/json', ...getStoreHeaders()},
           body: JSON.stringify({
             user_id: userId,
             allowed_tabs: selectedTabs,
@@ -1460,7 +1543,7 @@
       }
     }
 
-    function openEditUserModal(userId, username, role, status) {
+    function openEditUserModal(userId, username, role, assignedStore, status) {
       Swal.fire({
         title: `Edit Akun: ${username}`,
         html: `
@@ -1474,6 +1557,15 @@
               <select id="swalEditRole" class="w-full bg-slate-900 border border-slate-700 rounded-lg p-2 text-white">
                 <option value="kasir" ${role === 'kasir' ? 'selected' : ''}>KASIR</option>
                 <option value="admin" ${role === 'admin' ? 'selected' : ''}>ADMIN</option>
+              </select>
+            </div>
+            <div>
+              <label class="block text-slate-400 mb-1">Penugasan Toko</label>
+              <select id="swalEditStore" class="w-full bg-slate-900 border border-slate-700 rounded-lg p-2 text-white">
+                <option value="toko1" ${assignedStore === 'toko1' ? 'selected' : ''}>Toko 1</option>
+                <option value="toko2" ${assignedStore === 'toko2' ? 'selected' : ''}>Toko 2</option>
+                <option value="toko3" ${assignedStore === 'toko3' ? 'selected' : ''}>Toko 3</option>
+                <option value="*" ${assignedStore === '*' ? 'selected' : ''}>Semua Toko (* - Admin)</option>
               </select>
             </div>
             <div>
@@ -1498,6 +1590,7 @@
             user_id: userId,
             username: document.getElementById('swalEditUser').value.trim(),
             role: document.getElementById('swalEditRole').value,
+            assigned_store: document.getElementById('swalEditStore').value,
             status_approval: document.getElementById('swalEditStatus').value,
             new_password: document.getElementById('swalEditPass').value.trim() || null,
             admin_operator: currentUser ? currentUser.username : 'admin'
@@ -1505,9 +1598,9 @@
         }
       }).then(async (result) => {
         if (result.isConfirmed) {
-          const res = await fetch('/api/admin/users/edit', {
+          const res = await fetch(`/api/admin/users/edit?store_id=${currentStore}`, {
             method: 'PUT',
-            headers: {'Content-Type': 'application/json'},
+            headers: {'Content-Type': 'application/json', ...getStoreHeaders()},
             body: JSON.stringify(result.value)
           });
           const d = await res.json();
@@ -1524,7 +1617,7 @@
     function deleteUserAccount(userId, uname) {
       Swal.fire({
         title: `Hapus Akun '${uname}'?`,
-        text: 'Akun ini akan dihapus secara permanen dan tidak dapat login lagi.',
+        text: 'Akun ini akan dihapus secara permanen dari seluruh sistem cabang.',
         icon: 'warning',
         showCancelButton: true,
         confirmButtonColor: '#e11d48',
@@ -1532,8 +1625,9 @@
         cancelButtonText: 'Batal'
       }).then(async (r) => {
         if (r.isConfirmed) {
-          const res = await fetch(`/api/admin/users/${userId}?admin_operator=${currentUser ? currentUser.username : 'admin'}`, {
-            method: 'DELETE'
+          const res = await fetch(`/api/admin/users/${userId}?store_id=${currentStore}&admin_operator=${currentUser ? currentUser.username : 'admin'}`, {
+            method: 'DELETE',
+            headers: getStoreHeaders()
           });
           const d = await res.json();
           if (res.ok) {
@@ -1559,16 +1653,19 @@
 
     function applyUserPermissionsUI() {
       const adminSection = document.getElementById('adminGroupSection');
+      const storeSwitcher = document.getElementById('globalStoreSwitcher');
 
       if (!currentUser) return;
 
       if (currentUser.role === 'admin') {
         adminSection.classList.remove('hidden');
         document.querySelectorAll('.nav-item').forEach(btn => btn.classList.remove('hidden'));
+        if (storeSwitcher) storeSwitcher.disabled = false;
       } else {
         adminSection.classList.add('hidden');
-        const allowed = currentUser.allowed_tabs || [];
+        if (storeSwitcher) storeSwitcher.disabled = true;
 
+        const allowed = currentUser.allowed_tabs || [];
         availableFeatures.forEach(feat => {
           const btn = document.getElementById('tabBtn_' + feat.id);
           if (btn) {
@@ -1591,15 +1688,14 @@
 
       if (currentUser) {
         nameTxt.innerText = currentUser.username;
-        roleTxt.innerText = currentUser.role.toUpperCase();
+        roleTxt.innerText = `${currentUser.role.toUpperCase()} (${currentStore.toUpperCase()})`;
       }
       applyUserPermissionsUI();
     }
 
-    // ================= FUNGSI PERPUSTAKAAN DOKUMEN =================
     async function loadDocuments() {
       try {
-        const res = await fetch('/api/documents');
+        const res = await fetch(`/api/documents?store_id=${currentStore}`, { headers: getStoreHeaders() });
         if (!res.ok) return;
         allDocumentsList = await res.json();
         renderDocumentGroups(allDocumentsList);
@@ -1613,7 +1709,7 @@
       container.innerHTML = '';
 
       if (docs.length === 0) {
-        container.innerHTML = `<div class="bg-[#111827] border border-slate-800 p-8 rounded-xl text-center text-xs text-slate-500">Tidak ada dokumen yang sesuai dengan filter.</div>`;
+        container.innerHTML = `<div class="bg-[#111827] border border-slate-800 p-8 rounded-xl text-center text-xs text-slate-500">Tidak ada dokumen di perpustakaan ${currentStore.toUpperCase()}.</div>`;
         return;
       }
 
@@ -1632,7 +1728,7 @@
           <div class="flex items-center justify-between text-xs border-b border-slate-800/80 pb-2">
             <div class="flex items-center space-x-2">
               <span class="font-bold text-white text-sm">📅 ${dateStr}</span>
-              <span class="text-[10px] bg-slate-800 text-slate-400 px-2 py-0.5 rounded-full border border-slate-700">${dateItems.length} dokumen</span>
+              <span class="text-[10px] bg-slate-800 text-slate-400 px-2 py-0.5 rounded-full border border-slate-700">${dateItems.length} dokumen (${currentStore.toUpperCase()})</span>
             </div>
           </div>
           <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4" id="cards_${dateStr}"></div>
@@ -1699,7 +1795,7 @@
     }
 
     function openReportTab(dateStr) {
-      window.open(`/api/reports/daily-audit/${dateStr}`, '_blank');
+      window.open(`/api/reports/daily-audit/${dateStr}?store_id=${currentStore}`, '_blank');
       setTimeout(() => { loadDocuments(); }, 1200);
     }
 
@@ -1742,9 +1838,9 @@
         }
       }).then(async (result) => {
         if (result.isConfirmed) {
-          const res = await fetch('/api/documents/edit', {
+          const res = await fetch(`/api/documents/edit?store_id=${currentStore}`, {
             method: 'PUT',
-            headers: {'Content-Type': 'application/json'},
+            headers: {'Content-Type': 'application/json', ...getStoreHeaders()},
             body: JSON.stringify(result.value)
           });
           const d = await res.json();
@@ -1761,7 +1857,7 @@
     function deleteDocFile(docId, filename) {
       Swal.fire({
         title: `Hapus Dokumen?`,
-        text: `Berkas '${filename}' akan dihapus dari sistem.`,
+        text: `Berkas '${filename}' akan dihapus dari sistem cabang ${currentStore.toUpperCase()}.`,
         icon: 'warning',
         showCancelButton: true,
         confirmButtonColor: '#e11d48',
@@ -1769,7 +1865,7 @@
         cancelButtonText: 'Batal'
       }).then(async (r) => {
         if (r.isConfirmed) {
-          const res = await fetch(`/api/documents/${docId}`, { method: 'DELETE' });
+          const res = await fetch(`/api/documents/${docId}?store_id=${currentStore}`, { method: 'DELETE', headers: getStoreHeaders() });
           const d = await res.json();
           if (res.ok) {
             Swal.fire('Terhapus', d.message, 'success');
@@ -1817,16 +1913,16 @@
     }
 
     async function downloadDocFile(docId) {
-      window.open(`/api/documents/${docId}/download`, '_blank');
+      window.open(`/api/documents/${docId}/download?store_id=${currentStore}`, '_blank');
       setTimeout(() => { loadDocuments(); }, 1000);
     }
 
     async function toggleDocStatus(docId, curStatus) {
       const nextStatus = curStatus.toLowerCase() === 'terproses' ? 'Belum Diproses' : 'Terproses';
       try {
-        const res = await fetch(`/api/documents/${docId}/status`, {
+        const res = await fetch(`/api/documents/${docId}/status?store_id=${currentStore}`, {
           method: 'PUT',
-          headers: {'Content-Type': 'application/json'},
+          headers: {'Content-Type': 'application/json', ...getStoreHeaders()},
           body: JSON.stringify({ status: nextStatus })
         });
         if (res.ok) loadDocuments();
@@ -1856,13 +1952,14 @@
       const fd = new FormData();
       fd.append('file', fileInput.files[0]);
       fd.append('doc_date', docDate);
+      fd.append('store_id', currentStore);
 
       try {
-        const res = await fetch('/api/documents/upload', { method: 'POST', body: fd });
+        const res = await fetch(`/api/documents/upload?store_id=${currentStore}`, { method: 'POST', body: fd, headers: getStoreHeaders() });
         const data = await res.json();
         if (res.ok) {
           closeUploadDocModal();
-          Swal.fire('Sukses', 'Dokumen disimpan ke perpustakaan!', 'success');
+          Swal.fire('Sukses', `Dokumen disimpan ke perpustakaan ${currentStore.toUpperCase()}!`, 'success');
           loadDocuments();
         } else {
           Swal.fire('Gagal', data.detail || 'Gagal mengunggah', 'error');
@@ -1872,7 +1969,6 @@
       }
     }
 
-    // AUDIT & PENGELUARAN KAS
     function addLaciItem() {
       const c = document.getElementById('laciItemsContainer');
       const d = document.createElement('div');
@@ -1940,6 +2036,7 @@
 
       formData.append('override_existing', document.getElementById('overrideChk').checked);
       formData.append('username', currentUser.username);
+      formData.append('store_id', currentStore);
 
       const lItems = [];
       document.querySelectorAll('#laciItemsContainer > div').forEach(r => {
@@ -1967,10 +2064,10 @@
       });
       formData.append('brankas_items_json', JSON.stringify(bItems));
 
-      Swal.fire({title: 'Memproses Audit & ML...', didOpen: () => Swal.showLoading()});
+      Swal.fire({title: `Memproses Audit (${currentStore.toUpperCase()})...`, didOpen: () => Swal.showLoading()});
 
       try {
-        const res = await fetch('/api/run-audit', {method: 'POST', body: formData});
+        const res = await fetch(`/api/run-audit?store_id=${currentStore}`, {method: 'POST', body: formData, headers: getStoreHeaders()});
         const data = await res.json();
         if (!res.ok) throw new Error(data.detail || 'Gagal mengeksekusi audit');
 
@@ -1981,14 +2078,14 @@
         if (status === 'ATTENTION_REQUIRED') icon = 'error';
 
         Swal.fire({
-          title: `Status Audit: ${status}`,
+          title: `Status Audit: ${status} (${currentStore.toUpperCase()})`,
           html: `
             <div class="text-left text-xs space-y-1">
               <p><b>Kas Terkumpul:</b> Rp ${Number(data.cash_collected).toLocaleString('id-ID')}</p>
               <p><b>Tunai PDF:</b> Rp ${Number(data.system_cash_pdf).toLocaleString('id-ID')}</p>
               <p><b>Selisih Kas Fisik:</b> Rp ${Number(data.discrepancy).toLocaleString('id-ID')}</p>
               <p><b>Peringatan:</b> ${(data.ml_evaluation?.risk_flags || []).join('; ') || 'Nihil'}</p>
-              <p><b>Arsip Tersimpan:</b> data/raw/${data.audit_date}/ (5 File JSON)</p>
+              <p><b>Arsip Tersimpan:</b> data/raw/${currentStore}/${data.audit_date}/</p>
             </div>
           `,
           icon: icon,
@@ -1997,6 +2094,7 @@
 
         await loadDashboardSummary();
         await loadDocuments();
+        await loadFolderDates();
       } catch (err) {
         Swal.fire('Error', err.message, 'error');
       }
@@ -2004,7 +2102,7 @@
 
     async function loadDashboardSummary() {
       try {
-        const res = await fetch('/api/dashboard-summary');
+        const res = await fetch(`/api/dashboard-summary?store_id=${currentStore}`, { headers: getStoreHeaders() });
         const data = await res.json();
 
         const realCash = Number(data.cash_brankas ?? data.total_cash_fisik ?? 0);
@@ -2061,16 +2159,15 @@
       renderDebtsTable(filtered);
     }
 
-    // CHECKBOX MUTASI BANK DI TAB REKONSILIASI MANUAL (DENGAN LABEL SISA TEBAL)
     async function loadMatchingDropdowns() {
-      const sumRes = await fetch('/api/dashboard-summary');
+      const sumRes = await fetch(`/api/dashboard-summary?store_id=${currentStore}`, { headers: getStoreHeaders() });
       const sumData = await sumRes.json();
 
       const unContainer = document.getElementById('unmatchedListContainer');
       unContainer.innerHTML = '';
       const list = sumData.unmatched_mutations || [];
       if (list.length === 0) {
-        unContainer.innerHTML = '<p class="text-slate-500 py-2">Semua mutasi kredit (CR) sudah matched.</p>';
+        unContainer.innerHTML = `<p class="text-slate-500 py-2">Semua mutasi kredit (CR) ${currentStore.toUpperCase()} sudah matched.</p>`;
       } else {
         list.forEach(m => {
           const div = document.createElement('div');
@@ -2096,10 +2193,10 @@
 
       populateTargetDebtsCheckboxes(sumData.debts_table || []);
 
-      const custRes = await fetch('/api/admin/customers');
+      const custRes = await fetch(`/api/admin/customers?store_id=${currentStore}`, { headers: getStoreHeaders() });
       const custList = await custRes.json();
       const custSelect = document.getElementById('selectTargetCust');
-      custSelect.innerHTML = '<option value="">-- Pilih Master Pelanggan --</option>';
+      custSelect.innerHTML = `<option value="">-- Pilih Master Pelanggan (${currentStore.toUpperCase()}) --</option>`;
       custList.forEach(c => {
         const opt = document.createElement('option');
         opt.value = c.code;
@@ -2129,19 +2226,20 @@
         target_receivable_ids: selectedDebtIds.length > 0 ? selectedDebtIds : null,
         target_customer_code: targetCustCode || null,
         note: note || "Match Manual Kasir/Admin",
-        username: currentUser.username
+        username: currentUser.username,
+        store_id: currentStore
       };
 
       try {
-        const res = await fetch('/api/batch-manual-match', {
+        const res = await fetch(`/api/batch-manual-match?store_id=${currentStore}`, {
           method: 'POST',
-          headers: {'Content-Type': 'application/json'},
+          headers: {'Content-Type': 'application/json', ...getStoreHeaders()},
           body: JSON.stringify(payload)
         });
         const d = await res.json();
         if (!res.ok) throw new Error(d.detail || 'Gagal memproses matching');
 
-        Swal.fire('Sukses', `Berhasil mencocokkan ${indices.length} transaksi mutasi (Total Terpakai: Rp ${Number(d.matched_total).toLocaleString('id-ID')})`, 'success');
+        Swal.fire('Sukses', `Berhasil mencocokkan ${indices.length} transaksi di ${currentStore.toUpperCase()} (Total: Rp ${Number(d.matched_total).toLocaleString('id-ID')})`, 'success');
         loadMatchingDropdowns();
         await loadDashboardSummary();
         await loadDocuments();
@@ -2150,9 +2248,8 @@
       }
     }
 
-    // ================= MASTER DATA PELANGGAN (DENGAN SEARCH) =================
     async function loadMasterCustomers() {
-      const res = await fetch('/api/admin/customers');
+      const res = await fetch(`/api/admin/customers?store_id=${currentStore}`, { headers: getStoreHeaders() });
       allCustomersData = await res.json();
       renderCustomersTable(allCustomersData);
     }
@@ -2162,7 +2259,7 @@
       tbody.innerHTML = '';
 
       if (!data || data.length === 0) {
-        tbody.innerHTML = `<tr><td colspan="5" class="p-4 text-center text-slate-500">Tidak ada data pelanggan yang cocok.</td></tr>`;
+        tbody.innerHTML = `<tr><td colspan="5" class="p-4 text-center text-slate-500">Tidak ada data pelanggan di ${currentStore.toUpperCase()}.</td></tr>`;
         return;
       }
 
@@ -2189,7 +2286,6 @@
       });
     }
 
-    // FUNGSI PENCARIAN MASTER PELANGGAN
     function filterCustomersTable() {
       const q = (document.getElementById('searchCustomers').value || '').toUpperCase();
       const filtered = allCustomersData.filter(c => 
@@ -2206,7 +2302,7 @@
       document.getElementById('custNameInput').value = name;
       document.getElementById('custAddressInput').value = address === '-' ? '' : address;
       document.getElementById('custPhoneInput').value = phone === '-' ? '' : phone;
-      document.getElementById('custFormTitle').innerText = `Edit: ${code}`;
+      document.getElementById('custFormTitle').innerText = `Edit: ${code} (${currentStore.toUpperCase()})`;
       document.getElementById('custSubmitBtn').innerText = 'Simpan Perubahan';
       document.getElementById('custCodeInput').focus();
     }
@@ -2217,7 +2313,7 @@
       document.getElementById('custNameInput').value = '';
       document.getElementById('custAddressInput').value = '';
       document.getElementById('custPhoneInput').value = '';
-      document.getElementById('custFormTitle').innerText = 'Tambah / Edit Acuan Pelanggan';
+      document.getElementById('custFormTitle').innerText = `Tambah Acuan Pelanggan (${currentStore.toUpperCase()})`;
       document.getElementById('custSubmitBtn').innerText = 'Simpan Master Pelanggan';
     }
 
@@ -2231,14 +2327,14 @@
         address: document.getElementById('custAddressInput').value,
         phone: document.getElementById('custPhoneInput').value
       };
-      const res = await fetch('/api/admin/customers', {
+      const res = await fetch(`/api/admin/customers?store_id=${currentStore}`, {
         method: 'POST',
-        headers: {'Content-Type': 'application/json'},
+        headers: {'Content-Type': 'application/json', ...getStoreHeaders()},
         body: JSON.stringify(payload)
       });
       const d = await res.json();
       if (res.ok) {
-        Swal.fire('Sukses', d.message || 'Data pelanggan berhasil disimpan!', 'success');
+        Swal.fire('Sukses', `Data pelanggan ${payload.customer_code} disimpan ke ${currentStore.toUpperCase()}!`, 'success');
         resetCustomerForm();
         loadMasterCustomers();
       } else {
@@ -2249,7 +2345,7 @@
     function deleteCustomer(id, code) {
       Swal.fire({
         title: `Hapus Pelanggan '${code}'?`,
-        text: 'Data master pelanggan ini akan dihapus dari acuan sistem.',
+        text: `Data pelanggan ini akan dihapus dari cabang ${currentStore.toUpperCase()}.`,
         icon: 'warning',
         showCancelButton: true,
         confirmButtonColor: '#e11d48',
@@ -2257,7 +2353,7 @@
         cancelButtonText: 'Batal'
       }).then(async (r) => {
         if (r.isConfirmed) {
-          const res = await fetch(`/api/admin/customers/${id}`, { method: 'DELETE' });
+          const res = await fetch(`/api/admin/customers/${id}?store_id=${currentStore}`, { method: 'DELETE', headers: getStoreHeaders() });
           const d = await res.json();
           if (res.ok) {
             Swal.fire('Terhapus', d.message, 'success');
@@ -2270,30 +2366,47 @@
     }
 
     async function loadFolderDates() {
-      const res = await fetch('/api/dashboard-summary');
+      const res = await fetch(`/api/dashboard-summary?store_id=${currentStore}`, { headers: getStoreHeaders() });
       const data = await res.json();
       const sel = document.getElementById('dateFolderSelect');
       sel.innerHTML = '';
-      (data.available_dates || []).forEach(d => {
-        const opt = document.createElement('option');
-        opt.value = d;
-        opt.innerText = d;
-        sel.appendChild(opt);
-      });
-      if (data.available_dates && data.available_dates.length > 0) {
+      
+      const dates = data.available_dates || [];
+      if (dates.length > 0) {
+        dates.forEach(d => {
+          const opt = document.createElement('option');
+          opt.value = d;
+          opt.innerText = d;
+          sel.appendChild(opt);
+        });
         loadDateFolderFiles();
+      } else {
+        currentFolderFiles = {};
+        document.getElementById('fileButtonsContainer').innerHTML = `<p class="text-slate-500 text-xs py-2">Belum ada arsip untuk ${currentStore.toUpperCase()}.</p>`;
+        document.getElementById('jsonPreviewBox').innerText = 'Tidak ada berkas JSON yang tersedia.';
       }
     }
 
     async function loadDateFolderFiles() {
       const dateStr = document.getElementById('dateFolderSelect').value;
-      if (!dateStr) return;
-      const res = await fetch(`/api/folder-files/${dateStr}`);
+      if (!dateStr) {
+        document.getElementById('fileButtonsContainer').innerHTML = `<p class="text-slate-500 text-xs py-2">Belum ada arsip untuk ${currentStore.toUpperCase()}.</p>`;
+        document.getElementById('jsonPreviewBox').innerText = 'Tidak ada berkas JSON yang tersedia.';
+        return;
+      }
+      const res = await fetch(`/api/folder-files/${dateStr}?store_id=${currentStore}`, { headers: getStoreHeaders() });
       currentFolderFiles = await res.json();
 
       const btnContainer = document.getElementById('fileButtonsContainer');
       btnContainer.innerHTML = '';
-      Object.keys(currentFolderFiles).forEach(fileName => {
+      const keys = Object.keys(currentFolderFiles);
+      if (keys.length === 0) {
+        btnContainer.innerHTML = `<p class="text-slate-500 text-xs py-2">Tidak ada berkas di tanggal ini.</p>`;
+        document.getElementById('jsonPreviewBox').innerText = 'Pilih berkas JSON di samping untuk memeriksa isinya...';
+        return;
+      }
+
+      keys.forEach(fileName => {
         const btn = document.createElement('button');
         btn.className = "w-full text-left bg-slate-900 hover:bg-slate-800 border border-slate-700 rounded-lg p-2 text-xs text-slate-200 block truncate transition";
         btn.innerText = `📄 ${fileName}`;
@@ -2303,14 +2416,12 @@
         btnContainer.appendChild(btn);
       });
 
-      if (Object.keys(currentFolderFiles).length > 0) {
-        const firstKey = Object.keys(currentFolderFiles)[0];
-        document.getElementById('jsonPreviewBox').innerText = JSON.stringify(currentFolderFiles[firstKey], null, 2);
-      }
+      const firstKey = keys[0];
+      document.getElementById('jsonPreviewBox').innerText = JSON.stringify(currentFolderFiles[firstKey], null, 2);
     }
 
     async function loadAdminSettingsData() {
-      const sumRes = await fetch('/api/dashboard-summary');
+      const sumRes = await fetch(`/api/dashboard-summary?store_id=${currentStore}`, { headers: getStoreHeaders() });
       const sumData = await sumRes.json();
       if (sumData.initial_balances) {
         document.getElementById('initCashInput').value = sumData.initial_balances.cash || 0;
@@ -2325,7 +2436,7 @@
     }
 
     async function loadAdminLogsData() {
-      const lRes = await fetch('/api/admin/audit-logs');
+      const lRes = await fetch(`/api/admin/audit-logs?store_id=${currentStore}`, { headers: getStoreHeaders() });
       const logs = await lRes.json();
       const tbody = document.getElementById('logsTableBody');
       tbody.innerHTML = '';
@@ -2371,6 +2482,7 @@
         html: `
           <div class="text-left text-xs space-y-2">
             <p><b>Pengguna:</b> ${l.username}</p>
+            <p><b>Cabang:</b> ${currentStore.toUpperCase()}</p>
             <p><b>Waktu:</b> ${l.waktu}</p>
             <p><b>Jenis Aksi:</b> <span class="bg-slate-800 px-2 py-0.5 rounded text-indigo-300 border border-slate-700">${l.aksi}</span></p>
             <p><b>Alamat IP:</b> ${l.ip}</p>
@@ -2396,14 +2508,14 @@
       };
 
       try {
-        const res = await fetch('/api/admin/set-initial-balances', {
+        const res = await fetch(`/api/admin/set-initial-balances?store_id=${currentStore}`, {
           method: 'POST',
-          headers: {'Content-Type': 'application/json'},
+          headers: {'Content-Type': 'application/json', ...getStoreHeaders()},
           body: JSON.stringify(payload)
         });
         const data = await res.json();
         if (res.ok) {
-          Swal.fire('Sukses', 'Saldo awal baseline berhasil disimpan!', 'success');
+          Swal.fire('Sukses', `Saldo awal baseline untuk ${currentStore.toUpperCase()} berhasil disimpan!`, 'success');
           await loadDashboardSummary();
         } else {
           Swal.fire('Gagal', data.detail || 'Gagal menyimpan saldo awal', 'error');
@@ -2421,27 +2533,38 @@
         model_max_age_days: parseInt(document.getElementById('cfgModelDays').value) || 7,
         username: currentUser.username
       };
-      const res = await fetch('/api/admin/ml-settings', {
+      const res = await fetch(`/api/admin/ml-settings?store_id=${currentStore}`, {
         method: 'POST',
-        headers: {'Content-Type': 'application/json'},
+        headers: {'Content-Type': 'application/json', ...getStoreHeaders()},
         body: JSON.stringify(payload)
       });
-      if (res.ok) Swal.fire('Sukses', 'Konfigurasi ML diperbarui!', 'success');
+      if (res.ok) Swal.fire('Sukses', `Konfigurasi ML ${currentStore.toUpperCase()} diperbarui!`, 'success');
       else Swal.fire('Gagal', 'Gagal memperbarui konfigurasi ML', 'error');
     }
 
-    // INISIALISASI
     window.addEventListener('DOMContentLoaded', async () => {
       addLaciItem();
       addBrankasItem();
 
       const cached = localStorage.getItem('toko_rina_user');
+      const savedStore = localStorage.getItem('toko_rina_store');
+      if (savedStore) {
+        currentStore = savedStore;
+      }
+
+      await loadStoresDropdown();
+
       if (cached) {
         try {
           currentUser = JSON.parse(cached);
+          if (currentUser.role !== 'admin' && currentUser.assigned_store && currentUser.assigned_store !== '*') {
+            currentStore = currentUser.assigned_store;
+          }
+          document.getElementById('globalStoreSwitcher').value = currentStore;
           document.getElementById('authScreen').classList.add('hidden');
           updateUserUI();
           await loadDashboardSummary();
+          await loadFolderDates();
           setTimeout(() => { initSalesChart('bulan'); }, 150);
         } catch (e) {
           localStorage.removeItem('toko_rina_user');

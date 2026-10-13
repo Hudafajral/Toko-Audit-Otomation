@@ -5,9 +5,8 @@ Layanan rekonsiliasi transfer bank Toko Rina:
 - Menghubungkan mutasi bank CR ke transaksi K.Debit hari ini HANYA jika:
   1. Nominal sama persis, DAN
   2. Nama pengirim mutasi benar-benar cocok dengan pelanggan
-- Mempertahankan riwayat pencocokan manual (MATCHED_MANUAL) yang sudah dilakukan pengguna
-  agar tidak tertimpa/hilang saat form audit dijalankan ulang.
-- Mencatat seluruh status ke mutasi_db_bank.json secara akurat.
+- Mempertahankan riwayat pencocokan manual (MATCHED_MANUAL) per cabang toko
+- Mencatat seluruh status ke data/raw/{store_id}/{audit_date}/mutasi_db_bank.json
 """
 from __future__ import annotations
 
@@ -83,7 +82,7 @@ def is_name_or_block_matched(cust_identifier: str, sender_raw_text: str) -> bool
     if cust_block and sender_block and cust_block == sender_block:
         return True
 
-    # 2. Cek kesamaan persis (cocok untuk kode 1 huruf seperti 'A', 'B', dsb)
+    # 2. Cek kesamaan persis
     if clean_cust == clean_sender:
         return True
 
@@ -99,13 +98,14 @@ def reconcile_daily_bank_mutations(
     db: Session,
     audit_date: str,
     mutations: List[Dict[str, Any]],
-    today_sales: List[Dict[str, Any]]
+    today_sales: List[Dict[str, Any]],
+    store_id: str = "toko3"
 ) -> Dict[str, Any]:
-    folder_path = Path("data/raw") / audit_date
+    folder_path = Path("data/raw") / store_id / audit_date
     folder_path.mkdir(parents=True, exist_ok=True)
     mb_file = folder_path / "mutasi_db_bank.json"
 
-    # PERTAHANKAN MATCH MANUAL SEBELUMNYA JIKA SUDAH ADA
+    # PERTAHANKAN MATCH MANUAL SEBELUMNYA DI TOKO INI
     existing_manual_matches = {}
     if mb_file.exists():
         try:
@@ -142,7 +142,7 @@ def reconcile_daily_bank_mutations(
                 "is_matched": False
             })
 
-    # 3. Siapkan Seluruh Piutang Aktif di Database
+    # 3. Siapkan Seluruh Piutang Aktif di Database Toko Ini
     active_recs = db.query(Receivable).filter(Receivable.status != "LUNAS").all()
     debt_items = []
     for r in active_recs:
@@ -156,7 +156,7 @@ def reconcile_daily_bank_mutations(
             "is_settled": False
         })
 
-    # 4. Ambil Kamus Nama dan Alias Pelanggan dari Master Data
+    # 4. Ambil Kamus Nama dan Alias Pelanggan dari Master Data Toko Ini
     alias_dict: Dict[str, List[str]] = {}
     for c in db.query(Customer).all():
         c_code_clean = clean_text_normalize(c.customer_code)
@@ -183,7 +183,6 @@ def reconcile_daily_bank_mutations(
         m_type = str(m.get("type") or "CR").upper()
         m_amount = float(m.get("amount") or 0.0)
 
-        # Cek apakah baris ini sebelumnya sudah dimatch manual oleh pengguna
         match_key = f"{m_date}_{m_desc}_{m_amount}"
         if match_key in existing_manual_matches:
             saved_rec = existing_manual_matches[match_key]
@@ -210,9 +209,7 @@ def reconcile_daily_bank_mutations(
             reconciled_records.append(record_entry)
             continue
 
-        # =========================================================
         # TAHAP 1: PRIORITAS PELUNASAN BON HARI INI
-        # =========================================================
         matched_debt_today = False
         for cs in today_credit_sales:
             if cs["is_matched"]:
@@ -241,9 +238,7 @@ def reconcile_daily_bank_mutations(
             reconciled_records.append(record_entry)
             continue
 
-        # =========================================================
         # TAHAP 2: COCOKKAN KE TRANSAKSI K.DEBIT HARI INI
-        # =========================================================
         matched_sales = False
         for ds in today_debit_sales:
             if ds["is_matched"]:
@@ -266,9 +261,7 @@ def reconcile_daily_bank_mutations(
             reconciled_records.append(record_entry)
             continue
 
-        # =========================================================
         # TAHAP 3: COCOKKAN KE TABEL PIUTANG DATABASE LAMA
-        # =========================================================
         matched_old_debt = False
         for d in debt_items:
             if d["is_settled"]:
@@ -300,6 +293,7 @@ def reconcile_daily_bank_mutations(
         reconciled_records.append(record_entry)
 
     output_data = {
+        "store_id": store_id,
         "audit_date": audit_date,
         "total_records": len(reconciled_records),
         "total_unmatched_cr": len(unmatched_transfers),

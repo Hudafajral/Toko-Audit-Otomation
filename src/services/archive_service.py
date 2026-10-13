@@ -1,6 +1,6 @@
 """
 src/services/archive_service.py
-Layanan penyimpanan berkas kas fisik harian ke folder data/raw/YYYY-MM-DD/.
+Layanan penyimpanan berkas kas fisik harian ke folder data/raw/{store_id}/{YYYY-MM-DD}/.
 """
 from __future__ import annotations
 
@@ -14,16 +14,19 @@ def save_daily_cash_files(
     drawer_items: List[Dict[str, Any]],
     vault_items: List[Dict[str, Any]],
     input_by: str,
-    base_dir: str = "data/raw"
+    base_dir: str = "data/raw",
+    store_id: str = "toko3"
 ) -> Dict[str, str]:
-    target_dir = Path(base_dir) / audit_date
+    # Mengarahkan penyimpanan ke direktori cabang toko yang sesuai
+    target_dir = Path(base_dir) / store_id / audit_date
     target_dir.mkdir(parents=True, exist_ok=True)
 
     # 1. uang_masuk_brankas.json (nominal total setoran bersih)
     f_vault_in = {
         "date": audit_date,
         "nominal": vault_in,
-        "input_by": input_by
+        "input_by": input_by,
+        "store_id": store_id
     }
     path_vault_in = target_dir / "uang_masuk_brankas.json"
     path_vault_in.write_text(json.dumps(f_vault_in, indent=2, ensure_ascii=False), encoding="utf-8")
@@ -34,6 +37,7 @@ def save_daily_cash_files(
         "date": audit_date,
         "total_nominal": total_laci,
         "input_by": input_by,
+        "store_id": store_id,
         "items": drawer_items
     }
     path_drawer_out = target_dir / "uang_keluar_laci.json"
@@ -45,6 +49,7 @@ def save_daily_cash_files(
         "date": audit_date,
         "total_nominal": total_brankas_out,
         "input_by": input_by,
+        "store_id": store_id,
         "items": vault_items
     }
     path_vault_out = target_dir / "uang_keluar_brankas.json"
