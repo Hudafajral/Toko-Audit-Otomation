@@ -243,6 +243,17 @@
         </div>
         <div class="flex items-center space-x-3">
           <div class="text-xs text-slate-400 font-medium font-mono" id="currentDateDisplay">Kamis, 8 Okt 2026</div>
+          <div id="dbSelectorContainer" class="flex items-center space-x-1.5 bg-[#090d16] border border-slate-700/80 px-2 py-1 rounded-xl">
+            <span class="text-[11px] text-slate-400 font-bold">🗄️ DB:</span>
+            <select id="activeDbSelect" onchange="changeActiveDatabase(this.value)" class="bg-transparent text-xs font-bold text-indigo-300 focus:outline-none cursor-pointer">
+              <option value="toko_1">Toko 1</option>
+              <option value="toko_2">Toko 2</option>
+              <option value="toko_3">Toko 3</option>
+            </select>
+            <button id="btnAddDbModal" onclick="openCreateDbModal()" title="Tambah Database Toko Baru" class="w-6 h-6 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white font-black text-xs flex items-center justify-center transition active:scale-95">
+              +
+            </button>
+          </div>
         </div>
       </header>
 
@@ -560,11 +571,15 @@
           <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
             <div class="space-y-3">
               <div class="space-y-1.5" id="fileButtonsContainer"></div>
-              
-              <div class="pt-2 border-t border-slate-800/80">
+              <div class="pt-2 border-t border-slate-800/80 space-y-2">
                 <button type="button" onclick="printReportFromExplorer()" class="w-full bg-gradient-to-r from-indigo-600 to-indigo-500 hover:from-indigo-500 hover:to-indigo-400 text-white font-bold py-2.5 px-3 rounded-xl text-xs transition shadow-lg flex items-center justify-center gap-2 active:scale-95">
                   <span>🖨️</span>
                   <span>Cetak Laporan Audit</span>
+                </button>
+                <!-- TOMBOL HAPUS / ROLLBACK PER TANGGAL (ADMIN ONLY) -->
+                <button id="btnDeleteAuditDate" onclick="confirmDeleteAuditDate()" class="w-full py-2.5 px-4 bg-rose-600/20 hover:bg-rose-600 text-rose-300 hover:text-white border border-rose-500/40 rounded-xl text-xs font-bold transition flex items-center justify-center space-x-1.5" title="Hapus rekonsiliasi tanggal ini">
+                  <span>🗑️</span>
+                  <span>Hapus Data</span>
                 </button>
                 <p class="text-[10px] text-slate-500 text-center mt-1.5">Laporan otomatis tersusun dengan status terkini</p>
               </div>
@@ -728,6 +743,129 @@
 
   <!-- JAVASCRIPT CONTROLLER -->
   <script>
+    // Simpan DB aktif di localStorage
+    // Simpan DB aktif di localStorage
+    let currentActiveDb = localStorage.getItem('active_tenant_db') || 'toko_1';
+
+    // Override fetch agar otomatis menyertakan header X-Database-Name yang tepat
+    const originalFetch = window.fetch;
+    window.fetch = async function(...args) {
+      let [resource, config] = args;
+      config = config || {};
+      config.headers = config.headers || {};
+
+      // Cek apakah user yang tersimpan adalah kasir yang punya toko khusus
+      let targetDb = currentActiveDb;
+      try {
+        const uStr = localStorage.getItem('toko_rina_user');
+        if (uStr) {
+          const uObj = JSON.parse(uStr);
+          if (uObj.role === 'kasir' && uObj.assigned_tenant) {
+            targetDb = uObj.assigned_tenant;
+            currentActiveDb = targetDb;
+          }
+        }
+      } catch (e) {}
+      
+      if (config.headers instanceof Headers) {
+        config.headers.set('X-Database-Name', targetDb);
+      } else {
+        config.headers['X-Database-Name'] = targetDb;
+      }
+
+      // Jika URL adalah endpoint internal dan belum punya parameter query ?db=
+      if (typeof resource === 'string' && resource.startsWith('/api/') && !resource.includes('?db=')) {
+        const sep = resource.includes('?') ? '&' : '?';
+        resource = `${resource}${sep}db=${encodeURIComponent(targetDb)}`;
+      }
+
+      return originalFetch(resource, config);
+    };
+    function changeActiveDatabase(dbKey) {
+      currentActiveDb = dbKey;
+      localStorage.setItem('active_tenant_db', dbKey);
+
+      // 1. Bersihkan tampilan pratinjau JSON dan daftar file toko sebelumnya
+      const btnContainer = document.getElementById('fileButtonsContainer');
+      const previewBox = document.getElementById('jsonPreviewBox');
+      const dateSelect = document.getElementById('dateFolderSelect');
+      if (btnContainer) btnContainer.innerHTML = '';
+      if (previewBox) previewBox.innerText = 'Pilih berkas arsip untuk melihat data...';
+      if (dateSelect) dateSelect.innerHTML = '';
+
+      // 2. Muat ulang seluruh modul dengan tenant yang baru
+      loadDashboardSummary();
+      loadDocuments();
+      loadMasterCustomers();
+      loadAdminLogsData();
+    }
+
+    function openCreateDbModal() {
+    Swal.fire({
+      title: 'Buat Database / Toko Baru',
+      html: `
+        <div class="text-left text-xs space-y-3">
+          <div>
+            <label class="block text-slate-400 mb-1">ID Database (Tanpa Spasi, contoh: toko_4)</label>
+            <input id="swalDbKey" class="w-full bg-slate-900 border border-slate-700 rounded-lg p-2 text-white" placeholder="toko_4">
+          </div>
+          <div>
+            <label class="block text-slate-400 mb-1">Nama Tampilan Toko</label>
+            <input id="swalDbLabel" class="w-full bg-slate-900 border border-slate-700 rounded-lg p-2 text-white" placeholder="Toko 4 / Cabang Baru">
+          </div>
+          <div>
+            <label class="block text-slate-400 mb-1">Saldo Awal Kas (Opsional)</label>
+            <input id="swalDbCash" type="number" class="w-full bg-slate-900 border border-slate-700 rounded-lg p-2 text-white" placeholder="0">
+          </div>
+        </div>
+      `,
+      showCancelButton: true,
+      confirmButtonText: 'Buat Database',
+      cancelButtonText: 'Batal',
+      preConfirm: () => {
+        const key = document.getElementById('swalDbKey').value.trim();
+        const label = document.getElementById('swalDbLabel').value.trim();
+        if (!key || !label) {
+          Swal.showValidationMessage('ID dan Nama Toko wajib diisi!');
+          return false;
+        }
+        return {
+          db_name: key,
+          display_name: label,
+          initial_cash: parseFloat(document.getElementById('swalDbCash').value) || 0.0,
+          username: currentUser ? currentUser.username : 'admin'
+        };
+      }
+    }).then(async (result) => {
+      if (result.isConfirmed) {
+        try {
+          const res = await fetch('/api/admin/databases/create', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(result.value)
+          });
+          const d = await res.json();
+          if (res.ok) {
+            Swal.fire('Sukses', d.message, 'success');
+            // Tambahkan opsi baru ke dropdown dan langsung pilih
+            const sel = document.getElementById('activeDbSelect');
+            if (sel) {
+              const opt = document.createElement('option');
+              opt.value = d.db_key;
+              opt.innerText = result.value.display_name;
+              sel.appendChild(opt);
+              sel.value = d.db_key;
+              changeActiveDatabase(d.db_key);
+            }
+          } else {
+            Swal.fire('Gagal', d.detail || 'Gagal membuat database', 'error');
+          }
+        } catch (e) {
+          Swal.fire('Error', 'Terjadi kesalahan jaringan', 'error');
+        }
+      }
+    });
+  }
     let currentUser = null;
     let debtsData = [];
     let allCustomersData = [];
@@ -850,6 +988,7 @@
     }
 
     // FUNGSI CETAK LAPORAN DARI EXPLORER
+    // FUNGSI CETAK LAPORAN DARI EXPLORER
     function printReportFromExplorer() {
       const sel = document.getElementById('dateFolderSelect');
       const selectedDate = sel ? sel.value : null;
@@ -857,7 +996,8 @@
         Swal.fire('Perhatian', 'Pilih folder tanggal arsip terlebih dahulu!', 'warning');
         return;
       }
-      window.open(`/api/reports/daily-audit/${selectedDate}`, '_blank');
+      // Sertakan parameter database tenant aktif agar tab baru membaca toko yang benar
+      window.open(`/api/reports/daily-audit/${selectedDate}?db=${encodeURIComponent(currentActiveDb)}`, '_blank');
       setTimeout(() => { loadDocuments(); }, 1500);
     }
 
@@ -1213,6 +1353,15 @@
 
         currentUser = d;
         localStorage.setItem('toko_rina_user', JSON.stringify(d));
+        // Kunci database toko jika yang login adalah kasir
+        if (d.role === 'kasir') {
+          const targetTenant = d.assigned_tenant || 'toko_1';
+          currentActiveDb = targetTenant;
+          localStorage.setItem('active_tenant_db', targetTenant);
+          
+          const dbSelect = document.getElementById('activeDbSelect');
+          if (dbSelect) dbSelect.value = targetTenant;
+        }
         document.getElementById('authScreen').classList.add('hidden');
         updateUserUI();
 
@@ -1461,13 +1610,25 @@
     }
 
     function openEditUserModal(userId, username, role, status) {
+      // Ambil data tenant user terkait
+      const userObj = systemUserList.find(x => x.id === userId) || {};
+      const currentTenant = userObj.assigned_tenant || 'toko_1';
+
       Swal.fire({
         title: `Edit Akun: ${username}`,
         html: `
           <div class="text-left text-xs space-y-3">
             <div>
-              <label class="block text-slate-400 mb-1">Username Baru</label>
+              <label class="block text-slate-400 mb-1">Username</label>
               <input id="swalEditUser" class="w-full bg-slate-900 border border-slate-700 rounded-lg p-2 text-white" value="${username}">
+            </div>
+            <div>
+              <label class="block text-slate-400 mb-1">Toko Penempatan Kasir</label>
+              <select id="swalEditTenant" class="w-full bg-slate-900 border border-slate-700 rounded-lg p-2 text-indigo-300 font-bold">
+                <option value="toko_1" ${currentTenant === 'toko_1' ? 'selected' : ''}>Toko 1</option>
+                <option value="toko_2" ${currentTenant === 'toko_2' ? 'selected' : ''}>Toko 2</option>
+                <option value="toko_3" ${currentTenant === 'toko_3' ? 'selected' : ''}>Toko 3</option>
+              </select>
             </div>
             <div>
               <label class="block text-slate-400 mb-1">Peran (Role)</label>
@@ -1499,6 +1660,7 @@
             username: document.getElementById('swalEditUser').value.trim(),
             role: document.getElementById('swalEditRole').value,
             status_approval: document.getElementById('swalEditStatus').value,
+            assigned_tenant: document.getElementById('swalEditTenant').value,
             new_password: document.getElementById('swalEditPass').value.trim() || null,
             admin_operator: currentUser ? currentUser.username : 'admin'
           };
@@ -1588,10 +1750,25 @@
     function updateUserUI() {
       const nameTxt = document.getElementById('sidebarUserName');
       const roleTxt = document.getElementById('sidebarUserRole');
+      const dbContainer = document.getElementById('dbSelectorContainer');
+      const dbSelect = document.getElementById('activeDbSelect');
 
       if (currentUser) {
         nameTxt.innerText = currentUser.username;
         roleTxt.innerText = currentUser.role.toUpperCase();
+
+        if (currentUser.role === 'kasir') {
+          const assigned = currentUser.assigned_tenant || 'toko_1';
+          currentActiveDb = assigned;
+          localStorage.setItem('active_tenant_db', assigned);
+          if (dbSelect) dbSelect.value = assigned;
+
+          // Sembunyikan pemilih database agar kasir tidak gonta-ganti toko
+          if (dbContainer) dbContainer.classList.add('hidden');
+        } else {
+          // Tampilkan jika role adalah admin
+          if (dbContainer) dbContainer.classList.remove('hidden');
+        }
       }
       applyUserPermissionsUI();
     }
@@ -1699,7 +1876,8 @@
     }
 
     function openReportTab(dateStr) {
-      window.open(`/api/reports/daily-audit/${dateStr}`, '_blank');
+      // Sertakan parameter database tenant aktif
+      window.open(`/api/reports/daily-audit/${dateStr}?db=${encodeURIComponent(currentActiveDb)}`, '_blank');
       setTimeout(() => { loadDocuments(); }, 1200);
     }
 
@@ -2004,7 +2182,21 @@
 
     async function loadDashboardSummary() {
       try {
-        const res = await fetch('/api/dashboard-summary');
+        // 1. Jika pengguna adalah KASIR, prioritaskan toko penempatan kasir
+        let activeDb = 'toko_1';
+        if (currentUser && currentUser.role === 'kasir') {
+          activeDb = currentUser.assigned_tenant || 'toko_1';
+          currentActiveDb = activeDb;
+          localStorage.setItem('active_tenant_db', activeDb);
+        } else {
+          activeDb = currentActiveDb || localStorage.getItem('active_tenant_db') || 'toko_1';
+        }
+
+        const res = await fetch(`/api/dashboard-summary?db=${activeDb}`, {
+          headers: {
+            'X-Database-Name': activeDb
+          }
+        });
         const data = await res.json();
 
         const realCash = Number(data.cash_brankas ?? data.total_cash_fisik ?? 0);
@@ -2027,14 +2219,36 @@
         populateTargetDebtsCheckboxes(debtsData);
         updatePendingBadge(data.pending_registrations_count || 0);
 
-        if (data.available_dates && data.available_dates.length > 0) {
-          activeAuditDate = data.available_dates[0];
+        // Update opsi tanggal arsip JSON per toko
+        const dateSelect = document.getElementById('dateFolderSelect');
+        const previewBox = document.getElementById('jsonPreviewBox');
+
+        if (dateSelect) {
+          dateSelect.innerHTML = '';
+          if (data.available_dates && data.available_dates.length > 0) {
+            data.available_dates.forEach(d => {
+              const opt = document.createElement('option');
+              opt.value = d;
+              opt.innerText = d;
+              dateSelect.appendChild(opt);
+            });
+            activeAuditDate = data.available_dates[0];
+            // Muat file arsip milik tanggal teratas
+            loadDateFolderFiles();
+          } else {
+            const opt = document.createElement('option');
+            opt.value = '';
+            opt.innerText = '-- Belum ada berkas audit --';
+            dateSelect.appendChild(opt);
+            if (previewBox) {
+              previewBox.innerText = 'Toko ini belum memiliki arsip transaksi.';
+            }
+          }
         }
       } catch (err) {
         console.error("Gagal memuat dashboard summary:", err);
       }
     }
-
     function renderDebtsTable(rows) {
       const tbody = document.getElementById('debtsTableBody');
       tbody.innerHTML = '';
@@ -2287,28 +2501,90 @@
 
     async function loadDateFolderFiles() {
       const dateStr = document.getElementById('dateFolderSelect').value;
-      if (!dateStr) return;
-      const res = await fetch(`/api/folder-files/${dateStr}`);
-      currentFolderFiles = await res.json();
-
       const btnContainer = document.getElementById('fileButtonsContainer');
+      const previewBox = document.getElementById('jsonPreviewBox');
+      
+      if (!btnContainer || !previewBox) return;
       btnContainer.innerHTML = '';
-      Object.keys(currentFolderFiles).forEach(fileName => {
-        const btn = document.createElement('button');
-        btn.className = "w-full text-left bg-slate-900 hover:bg-slate-800 border border-slate-700 rounded-lg p-2 text-xs text-slate-200 block truncate transition";
-        btn.innerText = `📄 ${fileName}`;
-        btn.onclick = () => {
-          document.getElementById('jsonPreviewBox').innerText = JSON.stringify(currentFolderFiles[fileName], null, 2);
-        };
-        btnContainer.appendChild(btn);
-      });
 
-      if (Object.keys(currentFolderFiles).length > 0) {
-        const firstKey = Object.keys(currentFolderFiles)[0];
-        document.getElementById('jsonPreviewBox').innerText = JSON.stringify(currentFolderFiles[firstKey], null, 2);
+      if (!dateStr) {
+        previewBox.innerText = "Belum ada transaksi audit untuk database toko ini.";
+        return;
+      }
+
+      try {
+        const res = await fetch(`/api/folder-files/${dateStr}`);
+        if (!res.ok) {
+          previewBox.innerText = "Berkas arsip tidak ditemukan untuk toko ini.";
+          return;
+        }
+
+        const files = await res.json();
+        const fileKeys = Object.keys(files);
+
+        if (fileKeys.length === 0) {
+          previewBox.innerText = "Belum ada berkas arsip transaksi untuk tanggal ini di database terpilih.";
+          return;
+        }
+
+        fileKeys.forEach((fileName, idx) => {
+          const btn = document.createElement('button');
+          btn.className = "w-full text-left bg-slate-900 hover:bg-slate-800 border border-slate-700/80 rounded-xl p-2.5 text-xs font-mono text-slate-200 block truncate transition mb-1.5";
+          btn.innerText = `📄 ${fileName}`;
+          btn.onclick = () => {
+            previewBox.innerText = JSON.stringify(files[fileName], null, 2);
+          };
+          btnContainer.appendChild(btn);
+
+          // Tampilkan isi file pertama secara default
+          if (idx === 0) {
+            previewBox.innerText = JSON.stringify(files[fileName], null, 2);
+          }
+        });
+      } catch (err) {
+        previewBox.innerText = "Gagal memuat arsip JSON.";
       }
     }
+    async function confirmDeleteAuditDate() {
+      const dateStr = document.getElementById('dateFolderSelect').value;
+      if (!dateStr) {
+        Swal.fire('Perhatian', 'Pilih tanggal audit yang ingin dihapus terlebih dahulu.', 'warning');
+        return;
+      }
 
+      const confirmRes = await Swal.fire({
+        title: `Hapus Data Tanggal ${dateStr}?`,
+        text: `Seluruh 5 berkas JSON, dokumen laporan audit, dan pencatatan piutang tanggal ${dateStr} di database ${currentActiveDb} akan dihapus secara permanen.`,
+        icon: 'warning',
+        showCancelButton: true,
+        confirmButtonColor: '#e11d48',
+        cancelButtonColor: '#475569',
+        confirmButtonText: 'Ya, Hapus Data!',
+        cancelButtonText: 'Batal'
+      });
+
+      if (confirmRes.isConfirmed) {
+        try {
+          const adminUser = currentUser ? currentUser.username : 'admin';
+          const res = await fetch(`/api/admin/reconciliation/${dateStr}?admin_operator=${encodeURIComponent(adminUser)}`, {
+            method: 'DELETE'
+          });
+          const data = await res.json();
+
+          if (res.ok) {
+            Swal.fire('Terhapus!', data.message, 'success');
+            // Muat ulang data dashboard dan file explorer
+            loadDashboardSummary();
+            loadDocuments();
+            loadDateFolderFiles();
+          } else {
+            Swal.fire('Gagal', data.detail || 'Gagal menghapus data.', 'error');
+          }
+        } catch (err) {
+          Swal.fire('Error', 'Terjadi kesalahan koneksi ke server.', 'error');
+        }
+      }
+    }
     async function loadAdminSettingsData() {
       const sumRes = await fetch('/api/dashboard-summary');
       const sumData = await sumRes.json();
@@ -2431,6 +2707,7 @@
     }
 
     // INISIALISASI
+    // INISIALISASI
     window.addEventListener('DOMContentLoaded', async () => {
       addLaciItem();
       addBrankasItem();
@@ -2439,6 +2716,17 @@
       if (cached) {
         try {
           currentUser = JSON.parse(cached);
+
+          // Jika role kasir, set database tenant aktif seketika ke toko penempatan
+          if (currentUser && currentUser.role === 'kasir') {
+            const targetTenant = currentUser.assigned_tenant || 'toko_1';
+            currentActiveDb = targetTenant;
+            localStorage.setItem('active_tenant_db', targetTenant);
+
+            const dbSelect = document.getElementById('activeDbSelect');
+            if (dbSelect) dbSelect.value = targetTenant;
+          }
+
           document.getElementById('authScreen').classList.add('hidden');
           updateUserUI();
           await loadDashboardSummary();

@@ -25,6 +25,7 @@ class User(Base):
     registered_location = Column(String(255), default="Lokal / Internal")
     latitude = Column(Float, nullable=True)
     longitude = Column(Float, nullable=True)
+    assigned_tenant = Column(String(50), default="toko_1")
     # Daftar tab fitur yang diizinkan (format JSON list string)
     allowed_tabs = Column(Text, default='["homeDashboardTab","auditFormTab","docLibraryTab","piutangTab"]')
     created_at = Column(DateTime, default=datetime.utcnow)

@@ -1,65 +1,45 @@
 """
-reset_data.py
-Skrip pembersih folder arsip data/raw/ dan tabel piutang/transaksi database Toko Rina.
-Akun admin, kasir, dan pengaturan default ML tetap dipertahankan.
+reset.py
+Script pembersih dan reset database multi-tenant (Toko 1, Toko 2, Toko 3).
 """
 import shutil
 from pathlib import Path
-from sqlalchemy import text
+from src.database import DATA_DIR, get_engine_for_db, get_sessionmaker_for_db, get_tenant_folders, Base
+from src.models.audit_models import User, MLSetting
 
-from src.database import SessionLocal, engine
-from src.models.audit_models import (
-    Customer, Receivable, ExpenseItem, AuditActionLog, User, MLSetting
-)
+def reset_all_tenants():
+    print("⏳ Membersihkan seluruh database dan arsip tenant...")
 
-def reset_raw_folders():
-    """Menghapus semua folder arsip harian di dalam data/raw/."""
-    raw_dir = Path("data/raw")
-    if raw_dir.exists():
-        deleted_count = 0
-        for item in raw_dir.iterdir():
-            if item.is_dir():
-                shutil.rmtree(item, ignore_errors=True)
-                deleted_count += 1
-            elif item.is_file() and item.name != ".gitkeep":
-                item.unlink(missing_ok=True)
-                deleted_count += 1
-        print(f"✓ Berhasil membersihkan folder data/raw/ ({deleted_count} folder/berkas dihapus).")
-    else:
-        raw_dir.mkdir(parents=True, exist_ok=True)
-        print("✓ Folder data/raw/ dibuat ulang dalam kondisi kosong.")
+    # 1. Hapus folder tenants lama beserta semua file .db dan arsipnya
+    if DATA_DIR.exists():
+        shutil.rmtree(DATA_DIR)
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
 
-def reset_database():
-    """Mengosongkan tabel piutang, log audit, dan pengeluaran dari database."""
-    # 1. Bersihkan via koneksi SQL langsung untuk memastikan data terhapus tuntas
-    with engine.connect() as conn:
-        for tbl in ["receivables", "audit_logs", "expense_items"]:
-            try:
-                conn.execute(text(f"DELETE FROM {tbl};"))
-            except Exception:
-                pass
-        conn.commit()
+    # 2. Inisialisasi ulang 3 toko default
+    default_dbs = ["toko_1", "toko_2", "toko_3"]
+    for db_key in default_dbs:
+        engine = get_engine_for_db(db_key)
+        get_tenant_folders(db_key)
+        Base.metadata.create_all(bind=engine)
 
-    # 2. Pastikan akun default dan setting ML tetap ada
-    db = SessionLocal()
-    try:
-        if not db.query(User).filter(User.username == "admin").first():
-            db.add(User(username="admin", password_hash="admin123", role="admin"))
-        if not db.query(User).filter(User.username == "kasir").first():
-            db.add(User(username="kasir", password_hash="kasir123", role="kasir"))
-        if not db.query(MLSetting).first():
+        session_factory = get_sessionmaker_for_db(db_key)
+        with session_factory() as db:
+            # Buat akun admin default
+            admin = User(
+                username="admin",
+                password_hash="admin123",
+                role="admin",
+                status_approval="APPROVED",
+                allowed_tabs='["*"]',
+                registered_ip="127.0.0.1",
+                registered_location="Sistem Utama (Server)"
+            )
+            db.add(admin)
             db.add(MLSetting())
-        db.commit()
-        print("✓ Tabel utang (receivables), riwayat audit, dan item pengeluaran berhasil dikosongkan.")
-        print("✓ Akun default admin/kasir dan konfigurasi ML siap digunakan.")
-    except Exception as e:
-        db.rollback()
-        print(f"Error saat memastikan user default: {e}")
-    finally:
-        db.close()
+            db.commit()
+
+    print("✔ Akun default admin dan 3 database toko siap digunakan.")
+    print("Selesai! Sistem sudah kembali bersih dari awal (fresh state).")
 
 if __name__ == "__main__":
-    print("Memulai proses reset data Toko Rina...")
-    reset_raw_folders()
-    reset_database()
-    print("\nSelesai! Sistem sudah kembali bersih dari awal (fresh state).")
+    reset_all_tenants()
