@@ -1,4 +1,4 @@
-from src.database import engine, Base
+from src.database import Base
 from src.models.audit_models import Customer, CustomerAlias, ClusterAbbr, CashAuditLog, Receivable, BankLedgerDB
 
 def init_db():

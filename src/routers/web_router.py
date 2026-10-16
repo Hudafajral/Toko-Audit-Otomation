@@ -30,8 +30,13 @@ from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
 from sqlalchemy import text
 from sqlalchemy.orm import Session
+import shutil
+from src.database import (
+    get_db, Base, DATA_DIR, DEFAULT_DB_KEY, 
+    extract_db_name_from_request, get_tenant_folders, 
+    get_engine_for_db, get_sessionmaker_for_db
+)
 
-from src.database import SessionLocal, engine, Base
 from src.models.audit_models import (
     User, Customer, Receivable, AuditActionLog, MLSetting, UploadedDocument
 )
@@ -51,12 +56,130 @@ DOCS_DIR = Path("data/documents")
 DOCS_DIR.mkdir(parents=True, exist_ok=True)
 
 
-def get_db():
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
+# Model payload registrasi DB baru
+class CreateDatabasePayload(BaseModel):
+    db_name: str
+    display_name: str
+    initial_cash: float = 0.0
+    initial_transfer: float = 0.0
+    initial_debt: float = 0.0
+    username: str = "admin"
+
+@router.get("/api/databases/list")
+def list_available_databases(request: Request, db: Session = Depends(get_db)):
+    # Ambil semua file .db di folder tenants
+    db_files = list(DATA_DIR.glob("*.db"))
+    
+    # Jika awal belum ada, daftarkan 3 toko bawaan
+    default_keys = ["toko_1", "toko_2", "toko_3"]
+    for k in default_keys:
+        get_engine_for_db(k)
+        get_tenant_folders(k)
+
+    db_files = sorted(list(DATA_DIR.glob("*.db")))
+    databases = []
+    for f in db_files:
+        name_key = f.stem
+        # Format label display yang rapi
+        label = name_key.replace("_", " ").title()
+        databases.append({"key": name_key, "label": label})
+
+    active_db = extract_db_name_from_request(request)
+    return {"databases": databases, "active_db": active_db}
+
+@router.post("/api/admin/databases/create")
+def create_new_database(payload: CreateDatabasePayload, request: Request):
+    clean_key = "".join(c for c in payload.db_name if c.isalnum() or c in ("_", "-")).lower()
+    if not clean_key:
+        raise HTTPException(status_code=400, detail="Nama database tidak valid!")
+    
+    # Inisialisasi engine, schema tabel, dan folder fisik
+    engine = get_engine_for_db(clean_key)
+    get_tenant_folders(clean_key)
+    
+    # Inisialisasi akun admin dan saldo awal di DB baru tersebut
+    session_factory = get_sessionmaker_for_db(clean_key)
+    with session_factory() as new_session:
+        # Tambah admin utama
+        admin_u = new_session.query(User).filter(User.username == "admin").first()
+        if not admin_u:
+            new_session.add(User(
+                username="admin", 
+                password_hash="admin123", 
+                role="admin", 
+                status_approval="APPROVED",
+                allowed_tabs='["*"]'
+            ))
+        # Set saldo awal toko
+        cfg = new_session.query(MLSetting).first()
+        if not cfg:
+            cfg = MLSetting()
+            new_session.add(cfg)
+        cfg.initial_cash_balance = payload.initial_cash
+        cfg.initial_transfer_balance = payload.initial_transfer
+        cfg.initial_debt_balance = payload.initial_debt
+        cfg.updated_by = payload.username
+        
+        client_ip, client_loc, lat, lon = detect_client_info(request)
+        new_session.add(AuditActionLog(
+            username=payload.username,
+            action_type="DB_CREATE",
+            description=f"Database '{payload.display_name}' ({clean_key}) berhasil dibuat.",
+            client_ip=client_ip,
+            client_location=client_loc,
+            latitude=lat,
+            longitude=lon
+        ))
+        new_session.commit()
+
+    return {"status": "SUCCESS", "message": f"Database {payload.display_name} berhasil dibuat!", "db_key": clean_key}
+
+@router.delete("/api/admin/reconciliation/{audit_date}")
+def delete_reconciliation_by_date(audit_date: str, request: Request, admin_operator: str = "admin", db: Session = Depends(get_db)):
+    """
+    Rollback/Hapus hasil rekonsiliasi pada tanggal tertentu di database aktif (Admin Only).
+    """
+    db_name = extract_db_name_from_request(request)
+    folders = get_tenant_folders(db_name)
+    target_raw = folders["raw"] / audit_date
+
+    # 1. Hapus 5 file JSON arsip folder tanggal terkait
+    deleted_files = 0
+    if target_raw.exists() and target_raw.is_dir():
+        shutil.rmtree(target_raw)
+        deleted_files = 5
+
+    # 2. Hapus dokumen laporan resmi HTML di database dan perpustakaan dokumen
+    doc_report = db.query(UploadedDocument).filter(UploadedDocument.doc_date == audit_date).all()
+    for d in doc_report:
+        try:
+            p = Path(d.file_path)
+            if p.exists():
+                p.unlink()
+        except Exception:
+            pass
+        db.delete(d)
+
+    # 3. Bersihkan pencatatan piutang yang tercatat dari tanggal penjualan tersebut
+    db.query(Receivable).filter(Receivable.sale_date == audit_date).delete()
+
+    # 4. Catat jejak rollback ke audit trail
+    client_ip, client_loc, lat, lon = detect_client_info(request)
+    db.add(AuditActionLog(
+        username=admin_operator,
+        action_type="RECONCILIATION_DELETE",
+        description=f"Admin menghapus seluruh hasil rekonsiliasi tanggal {audit_date} pada database {db_name}",
+        client_ip=client_ip,
+        client_location=client_loc,
+        latitude=lat,
+        longitude=lon
+    ))
+    db.commit()
+
+    return {
+        "status": "SUCCESS", 
+        "message": f"Seluruh data audit tanggal {audit_date} pada database {db_name} berhasil dihapus dan di-rollback!"
+    }
 
 
 def detect_client_info(
@@ -110,55 +233,59 @@ def detect_client_info(
 
 @router.on_event("startup")
 def on_startup():
-    Base.metadata.create_all(bind=engine)
+    default_dbs = ["toko_1", "toko_2", "toko_3"]
+    
+    for db_key in default_dbs:
+        cur_engine = get_engine_for_db(db_key)
+        get_tenant_folders(db_key)
+        Base.metadata.create_all(bind=cur_engine)
 
-    with engine.connect() as conn:
-        cols_to_add = [
-            ("ml_settings", "initial_cash_balance", "FLOAT DEFAULT 0.0"),
-            ("ml_settings", "initial_transfer_balance", "FLOAT DEFAULT 0.0"),
-            ("ml_settings", "initial_debt_balance", "FLOAT DEFAULT 0.0"),
-            ("users", "allowed_tabs", "TEXT DEFAULT '[\"homeDashboardTab\",\"auditFormTab\",\"docLibraryTab\",\"piutangTab\"]'"),
-            ("users", "status_approval", "VARCHAR(20) DEFAULT 'APPROVED'"),
-            ("users", "registered_ip", "VARCHAR(50) DEFAULT '127.0.0.1'"),
-            ("users", "registered_location", "VARCHAR(255) DEFAULT 'Lokal / Internal'"),
-            ("users", "latitude", "FLOAT"),
-            ("users", "longitude", "FLOAT"),
-            ("audit_action_logs", "client_location", "VARCHAR(255) DEFAULT 'Lokal / Internal'"),
-            ("audit_action_logs", "latitude", "FLOAT"),
-            ("audit_action_logs", "longitude", "FLOAT")
-        ]
-        for tbl, col_name, col_type in cols_to_add:
-            try:
-                conn.execute(text(f"ALTER TABLE {tbl} ADD COLUMN {col_name} {col_type};"))
-                conn.commit()
-            except Exception:
-                pass
+        with cur_engine.connect() as conn:
+            cols_to_add = [
+                ("ml_settings", "initial_cash_balance", "FLOAT DEFAULT 0.0"),
+                ("ml_settings", "initial_transfer_balance", "FLOAT DEFAULT 0.0"),
+                ("ml_settings", "initial_debt_balance", "FLOAT DEFAULT 0.0"),
+                ("users", "allowed_tabs", "TEXT DEFAULT '[\"homeDashboardTab\",\"auditFormTab\",\"docLibraryTab\",\"piutangTab\"]'"),
+                ("users", "status_approval", "VARCHAR(20) DEFAULT 'APPROVED'"),
+                ("users", "registered_ip", "VARCHAR(50) DEFAULT '127.0.0.1'"),
+                ("users", "registered_location", "VARCHAR(255) DEFAULT 'Lokal / Internal'"),
+                ("users", "latitude", "FLOAT"),
+                ("users", "longitude", "FLOAT"),
+                ("users", "assigned_tenant", "VARCHAR(50) DEFAULT 'toko_1'"),
+                ("audit_action_logs", "client_location", "VARCHAR(255) DEFAULT 'Lokal / Internal'"),
+                ("audit_action_logs", "latitude", "FLOAT"),
+                ("audit_action_logs", "longitude", "FLOAT")
+            ]
+            for tbl, col_name, col_type in cols_to_add:
+                try:
+                    conn.execute(text(f"ALTER TABLE {tbl} ADD COLUMN {col_name} {col_type};"))
+                    conn.commit()
+                except Exception:
+                    pass
 
-    db = SessionLocal()
-    try:
-        admin_u = db.query(User).filter(User.username == "admin").first()
-        if not admin_u:
-            db.add(User(
-                username="admin", 
-                password_hash="admin123", 
-                role="admin", 
-                status_approval="APPROVED",
-                allowed_tabs='["*"]',
-                registered_ip="127.0.0.1",
-                registered_location="Sistem Utama (Server)",
-                latitude=-6.2917,
-                longitude=106.7170
-            ))
-        else:
-            admin_u.role = "admin"
-            admin_u.status_approval = "APPROVED"
-            admin_u.allowed_tabs = '["*"]'
-        if not db.query(MLSetting).first():
-            db.add(MLSetting())
-        db.commit()
-    finally:
-        db.close()
-
+        session_factory = get_sessionmaker_for_db(db_key)
+        with session_factory() as db:
+            admin_u = db.query(User).filter(User.username == "admin").first()
+            if not admin_u:
+                db.add(User(
+                    username="admin", 
+                    password_hash="admin123", 
+                    role="admin", 
+                    status_approval="APPROVED",
+                    allowed_tabs='["*"]',
+                    registered_ip="127.0.0.1",
+                    registered_location="Sistem Utama (Server)",
+                    latitude=-6.2917,
+                    longitude=106.7170
+                ))
+            else:
+                admin_u.role = "admin"
+                admin_u.status_approval = "APPROVED"
+                admin_u.allowed_tabs = '["*"]'
+            
+            if not db.query(MLSetting).first():
+                db.add(MLSetting())
+            db.commit()
 
 @router.get("/", response_class=HTMLResponse)
 def index_page(request: Request):
@@ -226,11 +353,13 @@ def login(payload: AuthPayload, request: Request, db: Session = Depends(get_db))
         longitude=lon
     ))
     db.commit()
+    tenant_assigned = getattr(u, "assigned_tenant", "toko_1") or "toko_1"
     return {
         "status": "SUCCESS", 
         "username": u.username, 
         "role": u.role,
         "allowed_tabs": allowed,
+        "assigned_tenant": tenant_assigned,
         "client_ip": client_ip,
         "client_location": client_loc,
         "latitude": lat,
@@ -239,52 +368,55 @@ def login(payload: AuthPayload, request: Request, db: Session = Depends(get_db))
 
 
 @router.post("/api/register-kasir")
-def register_kasir(payload: AuthPayload, request: Request, db: Session = Depends(get_db)):
+def register_kasir(payload: AuthPayload, request: Request):
     uname = payload.username.strip().lower()
     pwd = payload.password.strip()
-    if uname == "admin" or pwd == "admin123":
-        raise HTTPException(status_code=400, detail="Username/Password kasir tidak boleh sama dengan kredensial Admin!")
 
-    existing = db.query(User).filter(User.username == uname).first()
-    if existing:
-        raise HTTPException(status_code=400, detail="Username kasir sudah terdaftar!")
+    if uname == "admin":
+        raise HTTPException(status_code=400, detail="Username 'admin' khusus dan dilindungi sistem!")
 
     client_ip, client_loc, lat, lon = detect_client_info(
         request, lat=payload.latitude, lon=payload.longitude, client_loc_name=payload.location_name
     )
     default_permissions = json.dumps(["homeDashboardTab", "auditFormTab", "docLibraryTab", "piutangTab"])
 
-    new_user = User(
-        username=uname, 
-        password_hash=pwd, 
-        role="kasir",
-        status_approval="PENDING",
-        registered_ip=client_ip,
-        registered_location=client_loc,
-        latitude=lat,
-        longitude=lon,
-        allowed_tabs=default_permissions
-    )
-    db.add(new_user)
-    db.add(AuditActionLog(
-        username="SYSTEM",
-        action_type="USER_REGISTER",
-        description=f"Kasir baru mendaftar: '{uname}' dari {client_ip} ({client_loc}). Menunggu persetujuan.",
-        client_ip=client_ip,
-        client_location=client_loc,
-        latitude=lat,
-        longitude=lon
-    ))
-    db.commit()
-    return {
-        "status": "SUCCESS", 
-        "message": f"Pendaftaran berhasil! Akun '{uname}' sedang menunggu persetujuan (approval) dari Admin.",
-        "client_ip": client_ip,
-        "client_location": client_loc,
-        "latitude": lat,
-        "longitude": lon
-    }
+    # Ambil seluruh daftar database toko yang ada
+    db_files = list(DATA_DIR.glob("*.db"))
+    tenant_keys = [f.stem for f in db_files] if db_files else ["toko_1", "toko_2", "toko_3"]
 
+    for db_key in tenant_keys:
+        session_factory = get_sessionmaker_for_db(db_key)
+        with session_factory() as s:
+            existing = s.query(User).filter(User.username == uname).first()
+            if not existing:
+                new_u = User(
+                    username=uname,
+                    password_hash=pwd,
+                    role="kasir",
+                    status_approval="PENDING",
+                    registered_ip=client_ip,
+                    registered_location=client_loc,
+                    latitude=lat,
+                    longitude=lon,
+                    allowed_tabs=default_permissions,
+                    assigned_tenant="toko_1"
+                )
+                s.add(new_u)
+                s.add(AuditActionLog(
+                    username="SYSTEM",
+                    action_type="USER_REGISTER",
+                    description=f"Kasir baru mendaftar: '{uname}'. Menunggu persetujuan.",
+                    client_ip=client_ip,
+                    client_location=client_loc,
+                    latitude=lat,
+                    longitude=lon
+                ))
+                s.commit()
+
+    return {
+        "status": "SUCCESS",
+        "message": f"Pendaftaran berhasil! Akun '{uname}' sedang menunggu persetujuan (approval) Admin."
+    }
 
 # ================= MANAJEMEN USER (ADMIN ONLY) =================
 @router.get("/api/admin/users")
@@ -303,6 +435,7 @@ def get_user_list(db: Session = Depends(get_db)):
             "username": u.username,
             "role": u.role,
             "status_approval": u.status_approval or "APPROVED",
+            "assigned_tenant": getattr(u, "assigned_tenant", "toko_1") or "toko_1",
             "registered_ip": u.registered_ip or "127.0.0.1",
             "registered_location": u.registered_location or "Lokal",
             "latitude": getattr(u, "latitude", None),
@@ -330,22 +463,35 @@ def set_user_approval(payload: UserApprovalPayload, request: Request, db: Sessio
     if target_user.role == "admin" and target_user.username == "admin":
         raise HTTPException(status_code=400, detail="Akun Admin utama tidak dapat diubah statusnya")
 
-    target_user.status_approval = payload.status.upper()
-    client_ip, client_loc, lat, lon = detect_client_info(request)
+    uname = target_user.username
+    new_status = payload.status.upper()
 
-    act_text = "MENYETUJUI" if payload.status.upper() == "APPROVED" else "MENOLAK"
+    # Replikasi status approval ke semua database tenant
+    db_files = list(DATA_DIR.glob("*.db"))
+    tenant_keys = [f.stem for f in db_files] if db_files else ["toko_1", "toko_2", "toko_3"]
+
+    for db_key in tenant_keys:
+        session_factory = get_sessionmaker_for_db(db_key)
+        with session_factory() as s:
+            u_entry = s.query(User).filter(User.username == uname).first()
+            if u_entry:
+                u_entry.status_approval = new_status
+                s.commit()
+
+    client_ip, client_loc, lat, lon = detect_client_info(request)
+    act_text = "MENYETUJUI" if new_status == "APPROVED" else "MENOLAK"
     db.add(AuditActionLog(
         username=payload.username_admin,
         action_type="USER_APPROVAL",
-        description=f"Admin {act_text} aktivasi akun kasir '{target_user.username}'",
+        description=f"Admin {act_text} aktivasi akun kasir '{uname}' (Sinkron ke seluruh cabang)",
         client_ip=client_ip,
         client_location=client_loc,
         latitude=lat,
         longitude=lon
     ))
     db.commit()
-    return {"status": "SUCCESS", "message": f"Status akun {target_user.username} berhasil diubah menjadi {target_user.status_approval}"}
 
+    return {"status": "SUCCESS", "message": f"Status akun {uname} berhasil diubah menjadi {new_status}"}
 
 class UserPermissionPayload(BaseModel):
     user_id: int
@@ -381,6 +527,7 @@ class EditUserPayload(BaseModel):
     username: str
     role: str
     status_approval: str
+    assigned_tenant: Optional[str] = "toko_1"
     new_password: Optional[str] = None
     admin_operator: str = "admin"
 
@@ -393,32 +540,46 @@ def edit_user_profile(payload: EditUserPayload, request: Request, db: Session = 
     if u.username == "admin" and payload.username.lower() != "admin":
         raise HTTPException(status_code=400, detail="Username akun admin utama tidak boleh diubah!")
 
-    if payload.username.lower() != u.username:
-        dup = db.query(User).filter(User.username == payload.username.lower()).first()
-        if dup:
-            raise HTTPException(status_code=400, detail="Username tersebut sudah dipakai!")
-
+    target_uname = payload.username.lower().strip()
+    target_tenant = payload.assigned_tenant or "toko_1"
     old_uname = u.username
-    u.username = payload.username.lower().strip()
-    u.role = payload.role.lower().strip()
-    u.status_approval = payload.status_approval.upper().strip()
-    if payload.new_password and len(payload.new_password.strip()) >= 4:
-        u.password_hash = payload.new_password.strip()
+
+    # Update dan sinkronkan ke SELURUH file database toko yang ada
+    db_files = list(DATA_DIR.glob("*.db"))
+    tenant_keys = [f.stem for f in db_files] if db_files else ["toko_1", "toko_2", "toko_3"]
+
+    for db_key in tenant_keys:
+        try:
+            s_factory = get_sessionmaker_for_db(db_key)
+            with s_factory() as s:
+                target_user = s.query(User).filter(User.username == old_uname).first()
+                if not target_user:
+                    target_user = s.query(User).filter(User.id == payload.user_id).first()
+                if target_user:
+                    target_user.username = target_uname
+                    target_user.role = payload.role.lower().strip()
+                    target_user.status_approval = payload.status_approval.upper().strip()
+                    if hasattr(target_user, "assigned_tenant"):
+                        target_user.assigned_tenant = target_tenant
+                    if payload.new_password and len(payload.new_password.strip()) >= 4:
+                        target_user.password_hash = payload.new_password.strip()
+                    s.commit()
+        except Exception:
+            pass
 
     client_ip, client_loc, lat, lon = detect_client_info(request)
     db.add(AuditActionLog(
         username=payload.admin_operator,
         action_type="USER_EDIT",
-        description=f"Admin mengubah profil user '{old_uname}' -> '{u.username}', Role: {u.role}, Status: {u.status_approval}",
+        description=f"Admin mengubah profil '{old_uname}' -> '{target_uname}', Role: {payload.role}, Status: {payload.status_approval}, Penempatan Toko: {target_tenant} (Sinkron ke seluruh DB)",
         client_ip=client_ip,
         client_location=client_loc,
         latitude=lat,
         longitude=lon
     ))
     db.commit()
-    return {"status": "SUCCESS", "message": f"Data user {u.username} berhasil diperbarui!"}
 
-
+    return {"status": "SUCCESS", "message": f"Data user {target_uname} berhasil diperbarui di seluruh toko!"}
 @router.delete("/api/admin/users/{user_id}")
 def delete_user(user_id: int, request: Request, admin_operator: str = "admin", db: Session = Depends(get_db)):
     u = db.query(User).filter(User.id == user_id).first()
@@ -445,95 +606,86 @@ def delete_user(user_id: int, request: Request, admin_operator: str = "admin", d
 
 # ================= DASHBOARD SUMMARY =================
 @router.get("/api/dashboard-summary")
-def get_dashboard_summary(db: Session = Depends(get_db)):
-    debts = get_all_debts_for_table(db, include_settled=True)
-    total_debt = get_total_receivable_balance(db)
+def get_dashboard_summary(request: Request, db_param: Optional[str] = None):
+    # 1. Ambil nama database yang diminta secara tegas
+    db_name = request.query_params.get("db") or request.headers.get("X-Database-Name") or "toko_1"
+    
+    # 2. Buka database tenant yang bersangkutan
+    session_factory = get_sessionmaker_for_db(db_name)
+    with session_factory() as tenant_db:
+        debts = get_all_debts_for_table(tenant_db, include_settled=True)
+        total_debt = get_total_receivable_balance(tenant_db)
 
-    cfg = db.query(MLSetting).first()
-    init_cash = float(getattr(cfg, "initial_cash_balance", 0.0) or 0.0) if cfg else 0.0
-    init_tf = float(getattr(cfg, "initial_transfer_balance", 0.0) or 0.0) if cfg else 0.0
-    init_debt = float(getattr(cfg, "initial_debt_balance", 0.0) or 0.0) if cfg else 0.0
+        cfg = tenant_db.query(MLSetting).first()
+        init_cash = float(getattr(cfg, "initial_cash_balance", 0.0) or 0.0) if cfg else 0.0
+        init_tf = float(getattr(cfg, "initial_transfer_balance", 0.0) or 0.0) if cfg else 0.0
+        init_debt = float(getattr(cfg, "initial_debt_balance", 0.0) or 0.0) if cfg else 0.0
 
-    raw_dirs = sorted([d for d in Path("data/raw").glob("*") if d.is_dir()], reverse=True)
+        # 3. PASTIKAN MEMBACA FOLDER RAW MILIK TENANT TERSEBUT
+        folders = get_tenant_folders(db_name)
+        raw_dirs = sorted([d for d in folders["raw"].glob("*") if d.is_dir()], reverse=True)
 
-    total_kumulatif_cash_brankas = init_cash
-    total_kumulatif_net_tf = init_tf
-    latest_db_items = []
-    unmatched_mutations = []
-    available_dates = [d.name for d in raw_dirs]
+        total_kumulatif_cash_brankas = init_cash
+        total_kumulatif_net_tf = init_tf
+        latest_db_items = []
+        unmatched_mutations = []
+        available_dates = [d.name for d in raw_dirs]
 
-    for date_folder in raw_dirs:
-        vm_path = date_folder / "uang_masuk_brankas.json"
-        if vm_path.exists():
-            try:
-                vm_data = json.loads(vm_path.read_text(encoding="utf-8"))
-                val = float(vm_data.get("nominal") or vm_data.get("uang_masuk_brankas") or 0.0)
-                total_kumulatif_cash_brankas += val
-            except Exception:
-                pass
+        for date_folder in raw_dirs:
+            vm_path = date_folder / "uang_masuk_brankas.json"
+            if vm_path.exists():
+                try:
+                    vm_data = json.loads(vm_path.read_text(encoding="utf-8"))
+                    val = float(vm_data.get("nominal") or vm_data.get("uang_masuk_brankas") or 0.0)
+                    total_kumulatif_cash_brankas += val
+                except Exception:
+                    pass
 
-        mb_path = date_folder / "mutasi_db_bank.json"
-        if mb_path.exists():
-            try:
-                mb_data = json.loads(mb_path.read_text(encoding="utf-8"))
-                records = mb_data.get("records", [])
-                cr = sum(r.get("nominal", 0.0) for r in records if r.get("tipe") == "CR")
-                db_exp = sum(r.get("nominal", 0.0) for r in records if r.get("tipe") == "DB")
-                total_kumulatif_net_tf += (cr - db_exp)
+            mb_path = date_folder / "mutasi_db_bank.json"
+            if mb_path.exists():
+                try:
+                    mb_raw = json.loads(mb_path.read_text(encoding="utf-8"))
+                    records = mb_raw if isinstance(mb_raw, list) else mb_raw.get("records", [])
 
-                if not unmatched_mutations:
-                    for idx, r in enumerate(records):
-                        if r.get("tipe") == "CR":
-                            nom_asli = float(r.get("original_nominal") if "original_nominal" in r else r.get("nominal", 0.0))
-                            nom_aktif = float(r.get("sisa_nominal") if "sisa_nominal" in r else nom_asli)
-                            is_unmatched = r.get("status_matching") == "UNMATCHED"
-                            has_leftover = nom_aktif > 1.0 and (nom_aktif < nom_asli or r.get("has_leftover", False))
+                    for r in records:
+                        tipe = str(r.get("mutation_type") or r.get("type") or r.get("tipe") or "").upper()
+                        nominal = float(r.get("amount") if "amount" in r else r.get("nominal", 0.0))
 
-                            if is_unmatched or has_leftover:
-                                unmatched_mutations.append({
-                                    **r,
-                                    "id": idx,
-                                    "nominal": nom_aktif,
-                                    "original_nominal": nom_asli,
-                                    "is_leftover": has_leftover
-                                })
-                    latest_db_items = [r for r in records if r.get("tipe") == "DB"]
-            except Exception:
-                pass
+                        if tipe == "CR":
+                            total_kumulatif_net_tf += nominal
+                        elif tipe == "DB":
+                            total_kumulatif_net_tf -= nominal
+                except Exception:
+                    pass
 
-    pending_users = db.query(User).filter(User.status_approval == "PENDING").count()
+        pending_users = tenant_db.query(User).filter(User.status_approval == "PENDING").count()
 
-    return {
-        "total_cash_fisik": total_kumulatif_cash_brankas,
-        "cash_brankas": total_kumulatif_cash_brankas,
-        "total_active_debt": total_debt + init_debt,
-        "net_transfer": total_kumulatif_net_tf,
-        "debts_table": debts,
-        "latest_db_items": latest_db_items,
-        "unmatched_mutations": unmatched_mutations,
-        "available_dates": available_dates,
-        "pending_registrations_count": pending_users,
-        "initial_balances": {
-            "cash": init_cash,
-            "transfer": init_tf,
-            "debt": init_debt
-        },
-        "ml_settings": {
-            "cash_hard_limit": cfg.cash_hard_limit if cfg else 10000.0,
-            "vault_emergency_limit": cfg.vault_emergency_limit if cfg else 500000.0,
-            "model_max_age_days": cfg.model_max_age_days if cfg else 7
+        return {
+            "total_cash_fisik": total_kumulatif_cash_brankas,
+            "cash_brankas": total_kumulatif_cash_brankas,
+            "total_active_debt": total_debt + init_debt,
+            "net_transfer": total_kumulatif_net_tf,
+            "debts_table": debts,
+            "available_dates": available_dates,
+            "pending_registrations_count": pending_users,
+            "initial_balances": {
+                "cash": init_cash,
+                "transfer": init_tf,
+                "debt": init_debt
+            }
         }
-    }
-
 
 # ================= HELPER SINKRONISASI LAPORAN KE PERPUSTAKAAN =================
-def sync_audit_report_to_library(audit_date: str, db: Session, html_content: Optional[str] = None) -> None:
+def sync_audit_report_to_library(request: Request, audit_date: str, db: Session, html_content: Optional[str] = None) -> None:
+    db_name = extract_db_name_from_request(request)
+    folders = get_tenant_folders(db_name)
+    docs_dir = folders["docs"]
     if not html_content:
-        resp = generate_daily_audit_report(audit_date, db, auto_sync=False)
+        resp = generate_daily_audit_report(request,audit_date, db, auto_sync=False)
         html_content = resp.body.decode("utf-8")
 
     filename = f"Laporan_Audit_{audit_date}.html"
-    file_path = DOCS_DIR / filename
+    file_path = docs_dir / filename
     file_path.write_text(html_content, encoding="utf-8")
     size_kb = round(len(html_content.encode("utf-8")) / 1024, 1)
 
@@ -587,13 +739,16 @@ async def run_audit(
         if not audit_date:
             raise HTTPException(status_code=400, detail="Tanggal transaksi pada berkas PDF tidak dapat diidentifikasi.")
 
-        target_archive_dir = Path("data/raw") / audit_date
+        # Ambil folder penyimpanan raw dan docs khusus untuk tenant/toko aktif
+        db_name = extract_db_name_from_request(request)
+        tenant_folders = get_tenant_folders(db_name)
+        target_archive_dir = tenant_folders["raw"] / audit_date
         existing_marker = target_archive_dir / "uang_masuk_brankas.json"
 
         if existing_marker.exists() and not override_existing:
             raise HTTPException(
                 status_code=409,
-                detail=f"Laporan transaksi tanggal {audit_date} sudah pernah diaudit. Centang opsi timpa data jika ingin memproses ulang!"
+                detail=f"Laporan transaksi tanggal {audit_date} sudah pernah diaudit pada database {db_name}. Centang opsi timpa data jika ingin memproses ulang!"
             )
 
         bank_mutations = parse_bank_mutation_csv(io.BytesIO(csv_bytes))
@@ -602,12 +757,14 @@ async def run_audit(
         laci_items = json.loads(laci_items_json) if laci_items_json else []
         brankas_items = json.loads(brankas_items_json) if brankas_items_json else []
 
+        # Simpan kas fisik ke folder tenant aktif
         save_daily_cash_files(
             audit_date=audit_date,
             vault_in=vault_in,
             drawer_items=laci_items,
             vault_items=brankas_items,
-            input_by=username
+            input_by=username,
+            base_dir=str(tenant_folders["raw"])
         )
         
         pdf_summary_file = target_archive_dir / "penjualan_pos_pdf.json"
@@ -634,6 +791,10 @@ async def run_audit(
         }
         adj_file.write_text(json.dumps(adj_data, indent=2, ensure_ascii=False), encoding="utf-8")
 
+        # Simpan mutasi bank ke folder arsip tenant
+        bank_file = target_archive_dir / "mutasi_db_bank.json"
+        bank_file.write_text(json.dumps(bank_mutations, indent=2, ensure_ascii=False), encoding="utf-8")
+
         record_daily_credit_sales(db, audit_date, today_sales)
         db.commit()
 
@@ -647,8 +808,35 @@ async def run_audit(
                     settle_receivable(db, debt_id, float(recv_obj.remaining_amount), audit_date)
             db.commit()
 
-        reconcile_res = reconcile_daily_bank_mutations(db, audit_date, bank_mutations, today_sales)
+        # Rekonsiliasi mutasi bank dan simpan mutasi_db_bank.json ke target_archive_dir
+        # Rekonsiliasi mutasi bank
+        reconcile_res = reconcile_daily_bank_mutations(
+            db, 
+            audit_date, 
+            bank_mutations, 
+            today_sales, 
+            str(tenant_folders["raw"])
+        )
         db.commit()
+
+        # Ambil daftar rekonsiliasi yang sudah memuat status matching
+        final_records = reconcile_res.get("reconciled_records") or []
+        for r in final_records:
+            # Pastikan properti tipe dan nominal tersedia
+            r["type"] = r.get("tipe", "CR")
+            r["mutation_type"] = r.get("tipe", "CR")
+            r["amount"] = r.get("nominal", 0.0)
+
+        # Simpan struktur records ke arsip tenant
+        output_payload = {
+            "audit_date": audit_date,
+            "total_records": len(final_records),
+            "records": final_records
+        }
+
+        # Simpan ke mutasi_db_bank.json
+        bank_file = target_archive_dir / "mutasi_db_bank.json"
+        bank_file.write_text(json.dumps(output_payload , indent=2, ensure_ascii=False), encoding="utf-8")
 
         # 1. Total Uang Fisik Nyata Murni (Laci + Brankas)
         total_laci = sum(float(i.get("qty", 1.0)) * float(i.get("unit_price", 0.0)) for i in laci_items)
@@ -676,7 +864,7 @@ async def run_audit(
         db.add(AuditActionLog(
             username=username,
             action_type="AUDIT_RUN",
-            description=f"Audit {audit_date}: Brankas=Rp {vault_in:,.0f}, Tunai PDF=Rp {total_cash_pdf:,.0f}, Selisih Awal=Rp {raw_discrepancy:,.0f}, Sisa Selisih=Rp {net_remaining_discrepancy:,.0f}",
+            description=f"Audit {audit_date} [{db_name}]: Brankas=Rp {vault_in:,.0f}, Tunai PDF=Rp {total_cash_pdf:,.0f}, Selisih Awal=Rp {raw_discrepancy:,.0f}, Sisa Selisih=Rp {net_remaining_discrepancy:,.0f}",
             client_ip=client_ip,
             client_location=client_loc,
             latitude=lat,
@@ -684,9 +872,9 @@ async def run_audit(
         ))
         db.commit()
 
-        sync_audit_report_to_library(audit_date, db)
+        sync_audit_report_to_library(request, audit_date, db)
         for aff_date in affected_dates:
-            sync_audit_report_to_library(aff_date, db)
+            sync_audit_report_to_library(request, aff_date, db)
 
         return {
             "status": "SUCCESS",
@@ -703,12 +891,14 @@ async def run_audit(
     except Exception as exc:
         db.rollback()
         raise HTTPException(status_code=500, detail=f"Gagal memproses audit: {str(exc)}")
-
-
 # ================= GENERATOR LAPORAN AUDIT HARIAN =================
 @router.get("/api/reports/daily-audit/{audit_date}", response_class=HTMLResponse)
-def generate_daily_audit_report(audit_date: str, db: Session = Depends(get_db), auto_sync: bool = True):
-    raw_folder = Path("data/raw") / audit_date
+def generate_daily_audit_report(request: Request, audit_date: str, db: Session = Depends(get_db), auto_sync: bool = True):
+    # raw_folder = Path("data/raw") / audit_date
+    db_name = extract_db_name_from_request(request)
+    folders = get_tenant_folders(db_name)
+    raw_folder = folders["raw"] / audit_date
+    docs_dir = folders["docs"]
 
     # 1. Ringkasan Penjualan POS PDF
     cash_laporan_pdf = 0.0
@@ -772,7 +962,7 @@ def generate_daily_audit_report(audit_date: str, db: Session = Depends(get_db), 
         try:
             mb_data = json.loads(mb_file.read_text(encoding="utf-8"))
             for r in mb_data.get("records", []):
-                nom_asli = float(r.get("nominal", 0.0))
+                nom_asli = float(r.get("original_nominal") if "original_nominal" in r else (r.get("amount") if "amount" in r else r.get("nominal", 0.0)))
                 nom_terpakai = float(r.get("used_nominal") if "used_nominal" in r else nom_asli)
                 desc = r.get("keterangan", "-")
                 matched_with = str(r.get("matched_with", "-") or "-")
@@ -823,8 +1013,11 @@ def generate_daily_audit_report(audit_date: str, db: Session = Depends(get_db), 
     total_kredit_mutasi_match = sum(m["nominal"] for m in kredit_matches)
     total_utang_tersimpan_match = sum(m["nominal"] for m in utang_tersimpan_matches)
 
+    # Total seluruh mutasi yang berhasil dipasangkan (Debit + Kredit Bon + Utang Tersimpan)
     total_semua_mutasi_match = total_debit_mutasi_match + total_kredit_mutasi_match + total_utang_tersimpan_match
-    selisih_debit_mutasi = total_semua_mutasi_match - total_debit_mutasi_cr
+
+    # Jika uang mutasi bank (CR) masih tersisa / lebih besar dari yang terpakai -> Lebih Debit (+)
+    selisih_debit_mutasi = total_debit_mutasi_cr - total_semua_mutasi_match
 
     # 4. Pelanggan Utang Hari Ini
     receivables_today = (
@@ -935,20 +1128,20 @@ def generate_daily_audit_report(audit_date: str, db: Session = Depends(get_db), 
         debts_rows_html = "<tr><td colspan='2' class='text-slate-400'>- Nihil -</td></tr>"
 
     if selisih > 0:
-        selisih_html = f"+Rp {selisih:,.0f} (lebih)"
+        selisih_html = f"Rp {selisih:,.0f} (lebih)"
         selisih_color = "#0b7285"
     elif selisih < 0:
-        selisih_html = f"-Rp {abs(selisih):,.0f} (kurang)"
+        selisih_html = f"Rp {abs(selisih):,.0f} (kurang)"
         selisih_color = "#e11d48"
     else:
         selisih_html = "Rp 0 (Pas / Balance)"
         selisih_color = "#16a34a"
 
     if sisa_selisih > 0:
-        sisa_selisih_html = f"+Rp {sisa_selisih:,.0f} (lebih)"
+        sisa_selisih_html = f"Rp {sisa_selisih:,.0f} (lebih)"
         sisa_color = "#0b7285"
     elif sisa_selisih < 0:
-        sisa_selisih_html = f"-Rp {abs(sisa_selisih):,.0f} (kurang)"
+        sisa_selisih_html = f"Rp {abs(sisa_selisih):,.0f} (kurang)"
         sisa_color = "#e11d48"
     else:
         sisa_selisih_html = "Rp 0 (Pas / Selesai)"
@@ -1186,7 +1379,7 @@ def generate_daily_audit_report(audit_date: str, db: Session = Depends(get_db), 
     
     if auto_sync:
         try:
-            sync_audit_report_to_library(audit_date, db, html_content)
+            sync_audit_report_to_library(request, audit_date, db, html_content)
         except Exception:
             pass
 
@@ -1404,8 +1597,12 @@ class BatchManualMatchPayload(BaseModel):
 
 @router.post("/api/batch-manual-match")
 def batch_manual_match(payload: BatchManualMatchPayload, request: Request, db: Session = Depends(get_db)):
-    folder = Path("data/raw") / payload.audit_date
+    # 1. Pastikan mengarah ke folder tenant toko yang aktif
+    db_name = extract_db_name_from_request(request)
+    tenant_folders = get_tenant_folders(db_name)
+    folder = tenant_folders["raw"] / payload.audit_date
     mb_file = folder / "mutasi_db_bank.json"
+    
     if not mb_file.exists():
         raise HTTPException(status_code=404, detail="Berkas mutasi bank pada tanggal ini tidak ditemukan")
 
@@ -1423,6 +1620,13 @@ def batch_manual_match(payload: BatchManualMatchPayload, request: Request, db: S
     settled_details = []
     remaining_pool = total_pool_available
 
+    # Ambil info mutasi yang dipilih untuk dicatat di piutang
+    selected_mut_descs = [
+        f"Rp {float(records[idx].get('nominal', 0.0)):,.0f} ({records[idx].get('keterangan', '')})"
+        for idx in payload.selected_mutation_indices if 0 <= idx < len(records)
+    ]
+    mut_source_info = "; ".join(selected_mut_descs)
+
     if payload.target_receivable_ids:
         for debt_id in payload.target_receivable_ids:
             recv = db.query(Receivable).filter(Receivable.id == debt_id).first()
@@ -1433,6 +1637,10 @@ def batch_manual_match(payload: BatchManualMatchPayload, request: Request, db: S
                 settle_receivable(db, debt_id, pay_amt, payload.audit_date)
                 
                 db.flush()
+                # Simpan sumber pelunasan mutasi bank ke piutang
+                if hasattr(recv, "settlement_note"):
+                    recv.settlement_note = f"Transfer Bank {mut_source_info}"
+
                 is_lunas = (recv.status == "LUNAS")
                 rem_after = float(recv.remaining_amount)
 
@@ -1449,9 +1657,8 @@ def batch_manual_match(payload: BatchManualMatchPayload, request: Request, db: S
         db.commit()
 
     total_used = total_pool_available - remaining_pool
-
-    detail_labels = [f"{d['customer_code']}({d['allocated_amount']:,.0f})" for d in settled_details]
-    label_keterangan = f"manual({', '.join(detail_labels)})" if detail_labels else (payload.target_customer_code or "Match Manual")
+    detail_labels = [f"{d['customer_code']}(Rp {d['allocated_amount']:,.0f})" for d in settled_details]
+    label_keterangan = f"Manual ({', '.join(detail_labels)})" if detail_labels else (payload.target_customer_code or "Match Manual")
 
     temp_used = total_used
     for idx in payload.selected_mutation_indices:
@@ -1467,6 +1674,7 @@ def batch_manual_match(payload: BatchManualMatchPayload, request: Request, db: S
             temp_used -= take
 
             r["sisa_nominal"] = sisa_baru
+            r["nominal"] = sisa_baru  # Update nominal aktif agar terbaca sisa di frontend
             r["used_nominal"] = float(r.get("used_nominal", 0.0)) + take
             r["settled_details"] = settled_details
             r["matched_with"] = label_keterangan
@@ -1493,12 +1701,11 @@ def batch_manual_match(payload: BatchManualMatchPayload, request: Request, db: S
     ))
     db.commit()
 
-    sync_audit_report_to_library(payload.audit_date, db)
+    sync_audit_report_to_library(request, payload.audit_date, db)
     for aff_d in affected_dates:
-        sync_audit_report_to_library(aff_d, db)
+        sync_audit_report_to_library(request, aff_d, db)
 
     return {"status": "SUCCESS", "matched_total": total_used, "leftover_total": remaining_pool}
-
 
 # ================= MASTER DATA PELANGGAN =================
 class CustomerPayload(BaseModel):
@@ -1510,7 +1717,8 @@ class CustomerPayload(BaseModel):
 
 
 @router.get("/api/admin/customers")
-def get_customers(db: Session = Depends(get_db)):
+def get_customers(request: Request, db: Session = Depends(get_db)):
+    db_name = extract_db_name_from_request(request)
     custs = db.query(Customer).order_by(Customer.customer_code.asc()).all()
     return [
         {
@@ -1585,10 +1793,14 @@ def get_audit_logs(db: Session = Depends(get_db)):
 
 
 @router.get("/api/folder-files/{date_str}")
-def get_folder_files(date_str: str):
-    folder = Path("data/raw") / date_str
+def get_folder_files(request: Request, date_str: str):
+    db_name = extract_db_name_from_request(request)
+    folders = get_tenant_folders(db_name)
+    folder = folders["raw"] / date_str
+    
+    # Jika folder belum ada untuk toko ini, kembalikan objek kosong (jangan raise HTTP 404)
     if not folder.exists():
-        raise HTTPException(status_code=404, detail="Folder arsip tidak ditemukan")
+        return {}
 
     files_result = {}
     for f in folder.glob("*.json"):

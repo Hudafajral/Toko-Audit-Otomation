@@ -99,9 +99,11 @@ def reconcile_daily_bank_mutations(
     db: Session,
     audit_date: str,
     mutations: List[Dict[str, Any]],
-    today_sales: List[Dict[str, Any]]
+    today_sales: List[Dict[str, Any]],
+    base_dir: Optional[str] = None  # Tambahkan parameter ini
 ) -> Dict[str, Any]:
-    folder_path = Path("data/raw") / audit_date
+    target_base = Path(base_dir) if base_dir else Path("data/raw")
+    folder_path = target_base / audit_date
     folder_path.mkdir(parents=True, exist_ok=True)
     mb_file = folder_path / "mutasi_db_bank.json"
 
