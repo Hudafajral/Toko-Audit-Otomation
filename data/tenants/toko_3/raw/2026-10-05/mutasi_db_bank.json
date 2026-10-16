@@ -72,27 +72,13 @@
       "tanggal": "'05/10/2026",
       "keterangan": "TRSF E-BANKING CR 0510/FTSCY/WS95031          85000.00X",
       "tipe": "CR",
-      "nominal": 51000.0,
-      "status_matching": "MATCHED_MANUAL",
-      "matched_with": "Manual (H(Rp 34,000))",
-      "catatan_admin": "Match Manual Kasir/Admin",
+      "nominal": 85000.0,
+      "status_matching": "UNMATCHED",
+      "matched_with": null,
+      "catatan_admin": "",
       "type": "CR",
       "mutation_type": "CR",
-      "amount": 85000.0,
-      "original_nominal": 85000.0,
-      "sisa_nominal": 51000.0,
-      "used_nominal": 34000.0,
-      "settled_details": [
-        {
-          "receivable_id": 1,
-          "customer_code": "H",
-          "sale_date": "2026-10-05",
-          "allocated_amount": 34000.0,
-          "is_lunas": true,
-          "remaining": 0.0
-        }
-      ],
-      "has_leftover": true
+      "amount": 85000.0
     }
   ]
 }

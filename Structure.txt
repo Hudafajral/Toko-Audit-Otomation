@@ -5,9 +5,6 @@
 ├── dashboard.py
 ├── data
 │   ├── documents
-│   │   ├── 2026-10-03_1791423964_03.pdf
-│   │   ├── 2026-10-05_1791423936_05.pdf
-│   │   └── Laporan_Audit_2026-10-05.html
 │   ├── processed
 │   │   └── 2026-09-18
 │   │       ├── catatan_utang.json
@@ -15,14 +12,35 @@
 │   │       ├── mutasi_db_bank.json
 │   │       ├── uang_keluar_laci.json
 │   │       └── uang_masuk_brankas.json
-│   └── raw
-│       └── 2026-10-05
-│           ├── mutasi_db_bank.json
-│           ├── penjualan_pos_pdf.json
-│           ├── penyesuaian_kas.json
-│           ├── uang_keluar_brankas.json
-│           ├── uang_keluar_laci.json
-│           └── uang_masuk_brankas.json
+│   ├── raw
+│   │   └── 2026-10-05
+│   │       └── mutasi_db_bank.json
+│   └── tenants
+│       ├── toko4
+│       │   ├── documents
+│       │   └── raw
+│       ├── toko4.db
+│       ├── toko_1
+│       │   ├── documents
+│       │   │   └── Laporan_Audit_2026-10-05.html
+│       │   └── raw
+│       ├── toko_1.db
+│       ├── toko_2
+│       │   ├── documents
+│       │   └── raw
+│       ├── toko_2.db
+│       ├── toko_3
+│       │   ├── documents
+│       │   │   └── Laporan_Audit_2026-10-05.html
+│       │   └── raw
+│       │       └── 2026-10-05
+│       │           ├── mutasi_db_bank.json
+│       │           ├── penjualan_pos_pdf.json
+│       │           ├── penyesuaian_kas.json
+│       │           ├── uang_keluar_brankas.json
+│       │           ├── uang_keluar_laci.json
+│       │           └── uang_masuk_brankas.json
+│       └── toko_3.db
 ├── gen_structure.py
 ├── requirements.txt
 ├── reset.py
