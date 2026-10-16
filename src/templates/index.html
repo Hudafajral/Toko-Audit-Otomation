@@ -781,11 +781,15 @@
 
       return originalFetch(resource, config);
     };
+    
     function changeActiveDatabase(dbKey) {
       currentActiveDb = dbKey;
       localStorage.setItem('active_tenant_db', dbKey);
 
-      // 1. Bersihkan tampilan pratinjau JSON dan daftar file toko sebelumnya
+      const dbSelect = document.getElementById('activeDbSelect');
+      if (dbSelect) dbSelect.value = dbKey;
+
+      // 1. Bersihkan pratinjau JSON
       const btnContainer = document.getElementById('fileButtonsContainer');
       const previewBox = document.getElementById('jsonPreviewBox');
       const dateSelect = document.getElementById('dateFolderSelect');
@@ -793,11 +797,12 @@
       if (previewBox) previewBox.innerText = 'Pilih berkas arsip untuk melihat data...';
       if (dateSelect) dateSelect.innerHTML = '';
 
-      // 2. Muat ulang seluruh modul dengan tenant yang baru
+      // 2. Muat ulang seluruh modul secara eksplisit membawa tenant baru
       loadDashboardSummary();
       loadDocuments();
       loadMasterCustomers();
       loadAdminLogsData();
+      if (typeof loadMatchingDropdowns === 'function') loadMatchingDropdowns();
     }
 
     function openCreateDbModal() {
@@ -1776,7 +1781,7 @@
     // ================= FUNGSI PERPUSTAKAAN DOKUMEN =================
     async function loadDocuments() {
       try {
-        const res = await fetch('/api/documents');
+        const res = await fetch(`/api/documents?db=${encodeURIComponent(currentActiveDb)}`);
         if (!res.ok) return;
         allDocumentsList = await res.json();
         renderDocumentGroups(allDocumentsList);
@@ -2366,7 +2371,7 @@
 
     // ================= MASTER DATA PELANGGAN (DENGAN SEARCH) =================
     async function loadMasterCustomers() {
-      const res = await fetch('/api/admin/customers');
+      const res = await fetch(`/api/admin/customers?db=${encodeURIComponent(currentActiveDb)}`);
       allCustomersData = await res.json();
       renderCustomersTable(allCustomersData);
     }
@@ -2729,6 +2734,10 @@
 
           document.getElementById('authScreen').classList.add('hidden');
           updateUserUI();
+          
+          const dbSelect = document.getElementById('activeDbSelect');
+          if (dbSelect) dbSelect.value = currentActiveDb;
+
           await loadDashboardSummary();
           setTimeout(() => { initSalesChart('bulan'); }, 150);
         } catch (e) {

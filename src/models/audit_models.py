@@ -10,6 +10,8 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import relationship
 from src.database import Base
+from sqlalchemy import Column, Integer, String, Text, Float, DateTime, JSON
+
 
 
 class User(Base):
@@ -171,4 +173,22 @@ class UploadedDocument(Base):
     doc_date = Column(String(20), nullable=False, index=True)
     upload_time = Column(String(10), default="12:00")
     status = Column(String(30), default="Belum Diproses")
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class DailyAuditArchive(Base):
+    __tablename__ = "daily_audit_archives"
+
+    id = Column(Integer, primary_key=True, index=True)
+    audit_date = Column(String(20), index=True, nullable=False)
+    vault_cash_in = Column(Float, default=0.0)
+    net_bank_mutation = Column(Float, default=0.0)
+    
+    # Simpan 5 file JSON langsung ke dalam kolom JSON/JSONB
+    penjualan_pos_pdf = Column(JSON, nullable=True)
+    uang_masuk_brankas = Column(JSON, nullable=True)
+    uang_keluar_laci = Column(JSON, nullable=True)
+    penyesuaian_kas = Column(JSON, nullable=True)
+    mutasi_db_bank = Column(JSON, nullable=True)
+    
     created_at = Column(DateTime, default=datetime.utcnow)

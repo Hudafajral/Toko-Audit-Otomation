@@ -38,7 +38,7 @@ from src.database import (
 )
 
 from src.models.audit_models import (
-    User, Customer, Receivable, AuditActionLog, MLSetting, UploadedDocument
+    User, Customer, Receivable, AuditActionLog, MLSetting, UploadedDocument, DailyAuditArchive
 )
 from src.services.ingestion_service import parse_sales_report_pdf, parse_bank_mutation_csv
 from src.services.receivable_service import (
@@ -607,12 +607,17 @@ def delete_user(user_id: int, request: Request, admin_operator: str = "admin", d
 # ================= DASHBOARD SUMMARY =================
 @router.get("/api/dashboard-summary")
 def get_dashboard_summary(request: Request, db_param: Optional[str] = None):
-    # 1. Ambil nama database yang diminta secara tegas
-    db_name = request.query_params.get("db") or request.headers.get("X-Database-Name") or "toko_1"
+    # 1. Ambil nama database toko aktif dari parameter query atau header
+    db_name = extract_db_name_from_request(request)
     
-    # 2. Buka database tenant yang bersangkutan
+    # 2. Buka koneksi database tenant
     session_factory = get_sessionmaker_for_db(db_name)
     with session_factory() as tenant_db:
+        if "sqlite" not in str(tenant_db.bind.url):
+            safe_name = "".join(c for c in db_name if c.isalnum() or c in ("_", "-")).lower() or DEFAULT_DB_KEY
+            tenant_db.execute(text(f'SET search_path TO "{safe_name}", public'))
+
+        # Data Piutang & ML Settings dari Supabase
         debts = get_all_debts_for_table(tenant_db, include_settled=True)
         total_debt = get_total_receivable_balance(tenant_db)
 
@@ -621,42 +626,67 @@ def get_dashboard_summary(request: Request, db_param: Optional[str] = None):
         init_tf = float(getattr(cfg, "initial_transfer_balance", 0.0) or 0.0) if cfg else 0.0
         init_debt = float(getattr(cfg, "initial_debt_balance", 0.0) or 0.0) if cfg else 0.0
 
-        # 3. PASTIKAN MEMBACA FOLDER RAW MILIK TENANT TERSEBUT
+        # 3. AMBIL ARSIP DARI SUPABASE (ANTI HILANG SAAT KOYEB REDEPLOY)
+        db_archives = tenant_db.query(DailyAuditArchive).order_by(DailyAuditArchive.audit_date.desc()).all()
+        archive_map = {a.audit_date: a for a in db_archives}
+
+        # Gabungkan tanggal dari DB Supabase dan folder fisik lokal jika masih ada
         folders = get_tenant_folders(db_name)
-        raw_dirs = sorted([d for d in folders["raw"].glob("*") if d.is_dir()], reverse=True)
+        disk_raw_dirs = [d.name for d in folders["raw"].glob("*") if d.is_dir()] if folders["raw"].exists() else []
+        all_dates = sorted(list(set(list(archive_map.keys()) + disk_raw_dirs)), reverse=True)
 
         total_kumulatif_cash_brankas = init_cash
         total_kumulatif_net_tf = init_tf
-        latest_db_items = []
         unmatched_mutations = []
-        available_dates = [d.name for d in raw_dirs]
 
-        for date_folder in raw_dirs:
-            vm_path = date_folder / "uang_masuk_brankas.json"
-            if vm_path.exists():
-                try:
-                    vm_data = json.loads(vm_path.read_text(encoding="utf-8"))
-                    val = float(vm_data.get("nominal") or vm_data.get("uang_masuk_brankas") or 0.0)
-                    total_kumulatif_cash_brankas += val
-                except Exception:
-                    pass
+        # 4. Akumulasi saldo kas dan transfer bank
+        for dt_str in all_dates:
+            # Prioritaskan data dari Supabase DB
+            if dt_str in archive_map:
+                arch = archive_map[dt_str]
+                total_kumulatif_cash_brankas += float(arch.vault_cash_in or 0.0)
+                total_kumulatif_net_tf += float(arch.net_bank_mutation or 0.0)
 
-            mb_path = date_folder / "mutasi_db_bank.json"
-            if mb_path.exists():
-                try:
-                    mb_raw = json.loads(mb_path.read_text(encoding="utf-8"))
-                    records = mb_raw if isinstance(mb_raw, list) else mb_raw.get("records", [])
+                # Ambil daftar mutasi bank tanggal terbaru untuk dropdown manual match
+                if not unmatched_mutations and arch.mutasi_db_bank:
+                    mut_records = arch.mutasi_db_bank.get("records", []) if isinstance(arch.mutasi_db_bank, dict) else []
+                    for idx, r in enumerate(mut_records):
+                        status_m = str(r.get("status_matching", "")).upper()
+                        tipe_m = str(r.get("tipe", r.get("mutation_type", "CR"))).upper()
+                        if tipe_m == "CR" and status_m not in ["MATCHED_SALES_DEBIT", "K_DEBIT_MATCH", "MATCHED_MANUAL"]:
+                            unmatched_mutations.append({
+                                "id": idx,
+                                "nominal": float(r.get("sisa_nominal", r.get("nominal", r.get("amount", 0.0)))),
+                                "original_nominal": float(r.get("original_nominal", r.get("nominal", r.get("amount", 0.0)))),
+                                "keterangan": r.get("keterangan", "-"),
+                                "has_leftover": r.get("has_leftover", False)
+                            })
+            else:
+                # Fallback file lokal (jika arsip lama belum masuk tabel DB)
+                date_folder = folders["raw"] / dt_str
+                vm_path = date_folder / "uang_masuk_brankas.json"
+                if vm_path.exists():
+                    try:
+                        vm_data = json.loads(vm_path.read_text(encoding="utf-8"))
+                        val = float(vm_data.get("nominal") or vm_data.get("uang_masuk_brankas") or 0.0)
+                        total_kumulatif_cash_brankas += val
+                    except Exception:
+                        pass
 
-                    for r in records:
-                        tipe = str(r.get("mutation_type") or r.get("type") or r.get("tipe") or "").upper()
-                        nominal = float(r.get("amount") if "amount" in r else r.get("nominal", 0.0))
-
-                        if tipe == "CR":
-                            total_kumulatif_net_tf += nominal
-                        elif tipe == "DB":
-                            total_kumulatif_net_tf -= nominal
-                except Exception:
-                    pass
+                mb_path = date_folder / "mutasi_db_bank.json"
+                if mb_path.exists():
+                    try:
+                        mb_raw = json.loads(mb_path.read_text(encoding="utf-8"))
+                        records = mb_raw if isinstance(mb_raw, list) else mb_raw.get("records", [])
+                        for r in records:
+                            tipe = str(r.get("mutation_type") or r.get("type") or r.get("tipe") or "").upper()
+                            nominal = float(r.get("amount") if "amount" in r else r.get("nominal", 0.0))
+                            if tipe == "CR":
+                                total_kumulatif_net_tf += nominal
+                            elif tipe == "DB":
+                                total_kumulatif_net_tf -= nominal
+                    except Exception:
+                        pass
 
         pending_users = tenant_db.query(User).filter(User.status_approval == "PENDING").count()
 
@@ -666,7 +696,8 @@ def get_dashboard_summary(request: Request, db_param: Optional[str] = None):
             "total_active_debt": total_debt + init_debt,
             "net_transfer": total_kumulatif_net_tf,
             "debts_table": debts,
-            "available_dates": available_dates,
+            "available_dates": all_dates,
+            "unmatched_mutations": unmatched_mutations,
             "pending_registrations_count": pending_users,
             "initial_balances": {
                 "cash": init_cash,
@@ -743,9 +774,12 @@ async def run_audit(
         db_name = extract_db_name_from_request(request)
         tenant_folders = get_tenant_folders(db_name)
         target_archive_dir = tenant_folders["raw"] / audit_date
+
+        # Cek apakah transaksi sudah ada di DB Supabase atau disk lokal
+        existing_in_db = db.query(DailyAuditArchive).filter(DailyAuditArchive.audit_date == audit_date).first()
         existing_marker = target_archive_dir / "uang_masuk_brankas.json"
 
-        if existing_marker.exists() and not override_existing:
+        if (existing_in_db or existing_marker.exists()) and not override_existing:
             raise HTTPException(
                 status_code=409,
                 detail=f"Laporan transaksi tanggal {audit_date} sudah pernah diaudit pada database {db_name}. Centang opsi timpa data jika ingin memproses ulang!"
@@ -757,7 +791,7 @@ async def run_audit(
         laci_items = json.loads(laci_items_json) if laci_items_json else []
         brankas_items = json.loads(brankas_items_json) if brankas_items_json else []
 
-        # Simpan kas fisik ke folder tenant aktif
+        # 1. Simpan kas fisik ke folder tenant aktif (lokal runtime)
         save_daily_cash_files(
             audit_date=audit_date,
             vault_in=vault_in,
@@ -791,7 +825,7 @@ async def run_audit(
         }
         adj_file.write_text(json.dumps(adj_data, indent=2, ensure_ascii=False), encoding="utf-8")
 
-        # Simpan mutasi bank ke folder arsip tenant
+        # Simpan mutasi bank sementara ke folder arsip tenant
         bank_file = target_archive_dir / "mutasi_db_bank.json"
         bank_file.write_text(json.dumps(bank_mutations, indent=2, ensure_ascii=False), encoding="utf-8")
 
@@ -808,7 +842,6 @@ async def run_audit(
                     settle_receivable(db, debt_id, float(recv_obj.remaining_amount), audit_date)
             db.commit()
 
-        # Rekonsiliasi mutasi bank dan simpan mutasi_db_bank.json ke target_archive_dir
         # Rekonsiliasi mutasi bank
         reconcile_res = reconcile_daily_bank_mutations(
             db, 
@@ -822,7 +855,6 @@ async def run_audit(
         # Ambil daftar rekonsiliasi yang sudah memuat status matching
         final_records = reconcile_res.get("reconciled_records") or []
         for r in final_records:
-            # Pastikan properti tipe dan nominal tersedia
             r["type"] = r.get("tipe", "CR")
             r["mutation_type"] = r.get("tipe", "CR")
             r["amount"] = r.get("nominal", 0.0)
@@ -834,21 +866,42 @@ async def run_audit(
             "records": final_records
         }
 
-        # Simpan ke mutasi_db_bank.json
+        # Simpan ke mutasi_db_bank.json di disk lokal
         bank_file = target_archive_dir / "mutasi_db_bank.json"
-        bank_file.write_text(json.dumps(output_payload , indent=2, ensure_ascii=False), encoding="utf-8")
+        bank_file.write_text(json.dumps(output_payload, indent=2, ensure_ascii=False), encoding="utf-8")
 
-        # 1. Total Uang Fisik Nyata Murni (Laci + Brankas)
+        # Perhitungan uang fisik & selisih
         total_laci = sum(float(i.get("qty", 1.0)) * float(i.get("unit_price", 0.0)) for i in laci_items)
         total_brankas_out = sum(float(i.get("qty", 1.0)) * float(i.get("unit_price", 0.0)) for i in brankas_items)
         total_cash_fisik_murni = total_laci + vault_in
         total_cash_pdf = float(pdf_data.get("total_cash", 0.0))
 
-        # 2. Perhitungan Selisih Awal Kas dan Sisa Selisih Bersih
         raw_discrepancy = total_cash_fisik_murni - total_cash_pdf
         net_remaining_discrepancy = raw_discrepancy - cash_adjustment
 
-        # 3. Evaluasi ML Menggunakan Sisa Selisih Bersih yang Sebenarnya
+        # Hitung net mutasi transfer bank hari ini (CR dikurangi DB)
+        net_tf_today = sum(
+            float(r.get("amount") if "amount" in r else r.get("nominal", 0.0))
+            if str(r.get("tipe", "CR")).upper() == "CR"
+            else -float(r.get("amount") if "amount" in r else r.get("nominal", 0.0))
+            for r in final_records
+        )
+
+        # ================= SIMPAN KE POSTGRESQL SUPABASE (JSONB ARCHIVE) =================
+        archive_entry = db.query(DailyAuditArchive).filter(DailyAuditArchive.audit_date == audit_date).first()
+        if not archive_entry:
+            archive_entry = DailyAuditArchive(audit_date=audit_date)
+            db.add(archive_entry)
+
+        archive_entry.vault_cash_in = vault_in
+        archive_entry.net_bank_mutation = net_tf_today
+        archive_entry.penjualan_pos_pdf = pdf_summary_data
+        archive_entry.uang_masuk_brankas = {"nominal": vault_in, "uang_masuk_brankas": vault_in, "input_by": username}
+        archive_entry.uang_keluar_laci = {"items": laci_items}
+        archive_entry.penyesuaian_kas = adj_data
+        archive_entry.mutasi_db_bank = output_payload
+
+        # Evaluasi Machine Learning Risk Engine
         cfg = db.query(MLSetting).first() or MLSetting()
         audit_eval = evaluate_daily_audit_risks(
             current_discrepancy=net_remaining_discrepancy,
@@ -860,6 +913,7 @@ async def run_audit(
             model_max_age_days=cfg.model_max_age_days
         )
 
+        # Catat jejak ke audit log
         client_ip, client_loc, lat, lon = detect_client_info(request)
         db.add(AuditActionLog(
             username=username,
@@ -891,6 +945,8 @@ async def run_audit(
     except Exception as exc:
         db.rollback()
         raise HTTPException(status_code=500, detail=f"Gagal memproses audit: {str(exc)}")
+
+
 # ================= GENERATOR LAPORAN AUDIT HARIAN =================
 @router.get("/api/reports/daily-audit/{audit_date}", response_class=HTMLResponse)
 def generate_daily_audit_report(request: Request, audit_date: str, db: Session = Depends(get_db), auto_sync: bool = True):
@@ -1708,6 +1764,7 @@ def batch_manual_match(payload: BatchManualMatchPayload, request: Request, db: S
     return {"status": "SUCCESS", "matched_total": total_used, "leftover_total": remaining_pool}
 
 # ================= MASTER DATA PELANGGAN =================
+# ================= MASTER DATA PELANGGAN =================
 class CustomerPayload(BaseModel):
     customer_id: Optional[int] = None
     customer_code: str
@@ -1717,60 +1774,78 @@ class CustomerPayload(BaseModel):
 
 
 @router.get("/api/admin/customers")
-def get_customers(request: Request, db: Session = Depends(get_db)):
+def get_customers(request: Request):
     db_name = extract_db_name_from_request(request)
-    custs = db.query(Customer).order_by(Customer.customer_code.asc()).all()
-    return [
-        {
-            "id": c.id,
-            "code": c.customer_code,
-            "name": c.name,
-            "address": c.address_raw or "-",
-            "phone": c.phone or "-"
-        }
-        for c in custs
-    ]
+    session_factory = get_sessionmaker_for_db(db_name)
+    with session_factory() as db:
+        if "sqlite" not in str(db.bind.url):
+            safe_name = "".join(c for c in db_name if c.isalnum() or c in ("_", "-")).lower() or DEFAULT_DB_KEY
+            db.execute(text(f'SET search_path TO "{safe_name}", public'))
+        custs = db.query(Customer).order_by(Customer.customer_code.asc()).all()
+        return [
+            {
+                "id": c.id,
+                "code": c.customer_code,
+                "name": c.name,
+                "address": c.address_raw or "-",
+                "phone": c.phone or "-"
+            }
+            for c in custs
+        ]
 
 
 @router.post("/api/admin/customers")
-def save_customer(payload: CustomerPayload, db: Session = Depends(get_db)):
-    code_u = payload.customer_code.strip().upper()
-    cust = None
-    if payload.customer_id:
-        cust = db.query(Customer).filter(Customer.id == payload.customer_id).first()
+def save_customer(payload: CustomerPayload, request: Request):
+    db_name = extract_db_name_from_request(request)
+    session_factory = get_sessionmaker_for_db(db_name)
+    with session_factory() as db:
+        if "sqlite" not in str(db.bind.url):
+            safe_name = "".join(c for c in db_name if c.isalnum() or c in ("_", "-")).lower() or DEFAULT_DB_KEY
+            db.execute(text(f'SET search_path TO "{safe_name}", public'))
 
-    if not cust:
-        cust = db.query(Customer).filter(Customer.customer_code == code_u).first()
+        code_u = payload.customer_code.strip().upper()
+        cust = None
+        if payload.customer_id:
+            cust = db.query(Customer).filter(Customer.id == payload.customer_id).first()
 
-    if cust:
-        cust.customer_code = code_u
-        cust.name = payload.name.strip()
-        cust.address_raw = payload.address.strip()
-        cust.address_clean = payload.address.strip()
-        cust.phone = payload.phone.strip()
-    else:
-        db.add(Customer(
-            customer_code=code_u,
-            name=payload.name.strip(),
-            address_raw=payload.address.strip(),
-            address_clean=payload.address.strip(),
-            phone=payload.phone.strip()
-        ))
-    db.commit()
+        if not cust:
+            cust = db.query(Customer).filter(Customer.customer_code == code_u).first()
+
+        if cust:
+            cust.customer_code = code_u
+            cust.name = payload.name.strip()
+            cust.address_raw = payload.address.strip()
+            cust.address_clean = payload.address.strip()
+            cust.phone = payload.phone.strip()
+        else:
+            db.add(Customer(
+                customer_code=code_u,
+                name=payload.name.strip(),
+                address_raw=payload.address.strip(),
+                address_clean=payload.address.strip(),
+                phone=payload.phone.strip()
+            ))
+        db.commit()
     return {"status": "SUCCESS", "message": f"Data pelanggan '{code_u}' berhasil disimpan!"}
 
 
 @router.delete("/api/admin/customers/{customer_id}")
-def delete_customer(customer_id: int, db: Session = Depends(get_db)):
-    cust = db.query(Customer).filter(Customer.id == customer_id).first()
-    if not cust:
-        raise HTTPException(status_code=404, detail="Data pelanggan tidak ditemukan")
+def delete_customer(customer_id: int, request: Request):
+    db_name = extract_db_name_from_request(request)
+    session_factory = get_sessionmaker_for_db(db_name)
+    with session_factory() as db:
+        if "sqlite" not in str(db.bind.url):
+            safe_name = "".join(c for c in db_name if c.isalnum() or c in ("_", "-")).lower() or DEFAULT_DB_KEY
+            db.execute(text(f'SET search_path TO "{safe_name}", public'))
 
-    code_u = cust.customer_code
-    db.delete(cust)
-    db.commit()
+        cust = db.query(Customer).filter(Customer.id == customer_id).first()
+        if not cust:
+            raise HTTPException(status_code=404, detail="Data pelanggan tidak ditemukan")
+
+        code_u = cust.customer_code
+        db.delete(cust)
+        db.commit()
     return {"status": "SUCCESS", "message": f"Data pelanggan '{code_u}' berhasil dihapus!"}
-
 
 # ================= AUDIT LOGS & ARSIP =================
 @router.get("/api/admin/audit-logs")
@@ -1795,10 +1870,27 @@ def get_audit_logs(db: Session = Depends(get_db)):
 @router.get("/api/folder-files/{date_str}")
 def get_folder_files(request: Request, date_str: str):
     db_name = extract_db_name_from_request(request)
+    session_factory = get_sessionmaker_for_db(db_name)
+    
+    with session_factory() as db:
+        if "sqlite" not in str(db.bind.url):
+            safe_name = "".join(c for c in db_name if c.isalnum() or c in ("_", "-")).lower() or DEFAULT_DB_KEY
+            db.execute(text(f'SET search_path TO "{safe_name}", public'))
+
+        # 1. Prioritaskan baca arsip dari database Supabase (anti hilang saat Koyeb redeploy)
+        archive = db.query(DailyAuditArchive).filter(DailyAuditArchive.audit_date == date_str).first()
+        if archive:
+            return {
+                "penjualan_pos_pdf.json": archive.penjualan_pos_pdf or {},
+                "uang_masuk_brankas.json": archive.uang_masuk_brankas or {},
+                "uang_keluar_laci.json": archive.uang_keluar_laci or {},
+                "penyesuaian_kas.json": archive.penyesuaian_kas or {},
+                "mutasi_db_bank.json": archive.mutasi_db_bank or {}
+            }
+
+    # 2. Fallback baca disk lokal jika data arsip lama belum tersimpan di tabel database
     folders = get_tenant_folders(db_name)
     folder = folders["raw"] / date_str
-    
-    # Jika folder belum ada untuk toko ini, kembalikan objek kosong (jangan raise HTTP 404)
     if not folder.exists():
         return {}
 
@@ -1808,4 +1900,5 @@ def get_folder_files(request: Request, date_str: str):
             files_result[f.name] = json.loads(f.read_text(encoding="utf-8"))
         except Exception:
             files_result[f.name] = {}
+            
     return files_result
