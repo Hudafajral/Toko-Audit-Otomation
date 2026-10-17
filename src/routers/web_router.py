@@ -966,62 +966,79 @@ async def run_audit(
 # ================= GENERATOR LAPORAN AUDIT HARIAN =================
 @router.get("/api/reports/daily-audit/{audit_date}", response_class=HTMLResponse)
 def generate_daily_audit_report(request: Request, audit_date: str, db: Session = Depends(get_db), auto_sync: bool = True):
-    # raw_folder = Path("data/raw") / audit_date
     db_name = extract_db_name_from_request(request)
     folders = get_tenant_folders(db_name)
     raw_folder = folders["raw"] / audit_date
-    docs_dir = folders["docs"]
+
+    # Ambil data arsip resmi dari tabel Supabase
+    archive_entry = db.query(DailyAuditArchive).filter(DailyAuditArchive.audit_date == audit_date).first()
 
     # 1. Ringkasan Penjualan POS PDF
     cash_laporan_pdf = 0.0
     debit_laporan_pdf = 0.0
     kredit_laporan_pdf = 0.0
 
-    pdf_sum_file = raw_folder / "penjualan_pos_pdf.json"
-    if pdf_sum_file.exists():
-        try:
-            p_data = json.loads(pdf_sum_file.read_text(encoding="utf-8"))
-            cash_laporan_pdf = float(p_data.get("total_cash", 0.0))
-            debit_laporan_pdf = float(p_data.get("total_debit", 0.0))
-            kredit_laporan_pdf = float(p_data.get("total_credit", 0.0))
-        except Exception:
-            pass
+    if archive_entry and archive_entry.penjualan_pos_pdf:
+        p_data = archive_entry.penjualan_pos_pdf
+        cash_laporan_pdf = float(p_data.get("total_cash", 0.0))
+        debit_laporan_pdf = float(p_data.get("total_debit", 0.0))
+        kredit_laporan_pdf = float(p_data.get("total_credit", 0.0))
+    else:
+        pdf_sum_file = raw_folder / "penjualan_pos_pdf.json"
+        if pdf_sum_file.exists():
+            try:
+                p_data = json.loads(pdf_sum_file.read_text(encoding="utf-8"))
+                cash_laporan_pdf = float(p_data.get("total_cash", 0.0))
+                debit_laporan_pdf = float(p_data.get("total_debit", 0.0))
+                kredit_laporan_pdf = float(p_data.get("total_credit", 0.0))
+            except Exception:
+                pass
 
     # 2. Rekap Kas Fisik Murni (Brankas + Laci)
-    vault_in = 0.0
+    vault_in = float(archive_entry.vault_cash_in or 0.0) if archive_entry else 0.0
     laci_items = []
-    vm_file = raw_folder / "uang_masuk_brankas.json"
-    if vm_file.exists():
-        try:
-            d = json.loads(vm_file.read_text(encoding="utf-8"))
-            vault_in = float(d.get("nominal") or d.get("uang_masuk_brankas") or 0.0)
-        except Exception:
-            pass
 
-    laci_file = raw_folder / "uang_keluar_laci.json"
-    if laci_file.exists():
-        try:
-            d = json.loads(laci_file.read_text(encoding="utf-8"))
-            laci_items = d.get("items", [])
-        except Exception:
-            pass
+    if archive_entry and archive_entry.uang_keluar_laci:
+        laci_items = archive_entry.uang_keluar_laci.get("items", [])
+    else:
+        laci_file = raw_folder / "uang_keluar_laci.json"
+        if laci_file.exists():
+            try:
+                d = json.loads(laci_file.read_text(encoding="utf-8"))
+                laci_items = d.get("items", [])
+            except Exception:
+                pass
 
     total_keluar_laci = sum(float(i.get("qty", 1.0)) * float(i.get("unit_price", 0.0)) for i in laci_items)
     total_rekap_cash = vault_in + total_keluar_laci
 
+    # Ambil Penyesuaian Kas dari Supabase
     penyesuaian_kas = 0.0
     penyesuaian_ket = ""
-    adj_file = raw_folder / "penyesuaian_kas.json"
-    if adj_file.exists():
-        try:
-            d = json.loads(adj_file.read_text(encoding="utf-8"))
-            penyesuaian_kas = float(d.get("nominal", 0.0))
-            penyesuaian_ket = d.get("keterangan", "")
-        except Exception:
-            pass
+
+    if archive_entry and archive_entry.penyesuaian_kas:
+        adj_d = archive_entry.penyesuaian_kas
+        penyesuaian_kas = float(adj_d.get("nominal", 0.0))
+        penyesuaian_ket = adj_d.get("keterangan", "")
+    else:
+        adj_file = raw_folder / "penyesuaian_kas.json"
+        if adj_file.exists():
+            try:
+                adj_d = json.loads(adj_file.read_text(encoding="utf-8"))
+                penyesuaian_kas = float(adj_d.get("nominal", 0.0))
+                penyesuaian_ket = adj_d.get("keterangan", "")
+            except Exception:
+                pass
 
     selisih = total_rekap_cash - cash_laporan_pdf
-    sisa_selisih = selisih - penyesuaian_kas
+
+    # Perhitungan sisa selisih kas fisik
+    if selisih < 0 and penyesuaian_kas > 0:
+        sisa_selisih = selisih + penyesuaian_kas
+    elif selisih < 0 and penyesuaian_kas < 0:
+        sisa_selisih = selisih - penyesuaian_kas
+    else:
+        sisa_selisih = selisih - penyesuaian_kas
 
     # 3. Baca Mutasi Bank & Hitung Total Debit Mutasi (Semua CR Bank)
     debit_matches = []
@@ -1029,13 +1046,22 @@ def generate_daily_audit_report(request: Request, audit_date: str, db: Session =
     utang_tersimpan_matches = []
     total_debit_mutasi_cr = 0.0
 
-    mb_file = raw_folder / "mutasi_db_bank.json"
-    if mb_file.exists():
+    mb_data = {}
+    if archive_entry and archive_entry.mutasi_db_bank:
+        mb_data = archive_entry.mutasi_db_bank
+    else:
+        mb_file = raw_folder / "mutasi_db_bank.json"
+        if mb_file.exists():
+            try:
+                mb_data = json.loads(mb_file.read_text(encoding="utf-8"))
+            except Exception:
+                mb_data = {}
+
+    if mb_data:
         try:
-            mb_data = json.loads(mb_file.read_text(encoding="utf-8"))
             for r in mb_data.get("records", []):
                 nom_asli = float(r.get("original_nominal") if "original_nominal" in r else (r.get("amount") if "amount" in r else r.get("nominal", 0.0)))
-                nom_terpakai = float(r.get("used_nominal") if "used_nominal" in r else nom_asli)
+                nom_terpakai = float(r.get("used_nominal") if "used_nominal" in r else (nom_asli if r.get("status_matching") != "UNMATCHED" else 0.0))
                 desc = r.get("keterangan", "-")
                 matched_with = str(r.get("matched_with", "-") or "-")
                 status_m = (r.get("status_matching") or "").upper()
@@ -1047,37 +1073,27 @@ def generate_daily_audit_report(request: Request, audit_date: str, db: Session =
                 sender_name = desc.split("WS95011")[-1].strip() if "WS95011" in desc else desc
                 sender_name = sender_name.replace("TRSF E-BANKING CR", "").replace("0510/FTSCY/WS95271", "").replace("0510/FTSCY/WS95031", "").strip()[:24]
 
-                is_today_debt = False
-                if "BON PDF HARI INI" in matched_with.upper():
-                    is_today_debt = True
-
                 settled_details = r.get("settled_details", [])
-                if settled_details:
-                    all_today = all(item.get("sale_date") == audit_date for item in settled_details)
-                    if all_today:
-                        is_today_debt = True
 
                 if status_m in ["MATCHED_SALES_DEBIT", "K_DEBIT_MATCH"]:
-                    debit_matches.append({"nominal": nom_terpakai, "sender": sender_name or "Konsumen", "target": matched_with})
-                elif status_m in ["MATCHED_TODAY_CREDIT", "TODAY_CREDIT_SETTLED"] or is_today_debt:
+                    debit_matches.append({"nominal": nom_terpakai or nom_asli, "sender": sender_name or "Konsumen", "target": matched_with})
+                elif status_m in ["MATCHED_TODAY_CREDIT", "TODAY_CREDIT_SETTLED"]:
                     debit_target_desc = matched_with
                     if settled_details:
                         detail_strs = [f"{d['customer_code']}({d['allocated_amount']:,.0f})" for d in settled_details]
                         debit_target_desc = f"manual({', '.join(detail_strs)})"
-                    kredit_matches.append({"nominal": nom_terpakai, "sender": sender_name or "Konsumen", "target": debit_target_desc})
+                    kredit_matches.append({"nominal": nom_terpakai or nom_asli, "sender": sender_name or "Konsumen", "target": debit_target_desc})
                 elif status_m in ["MATCHED_DEBT_SETTLED", "OLD_DEBT_SETTLED", "MATCHED_MANUAL"]:
-                    if is_today_debt:
-                        continue
-
                     target_info = matched_with
                     if settled_details:
                         detail_strs = []
                         for d in settled_details:
                             status_label = "Lunas" if d.get("is_lunas") else f"Sebagian, Sisa: Rp {d.get('remaining', 0):,.0f}"
-                            detail_strs.append(f"{d['customer_code']} (Nota tgl {d['sale_date']} - {status_label})")
+                            detail_strs.append(f"{d.get('customer_code', '-')} (Nota tgl {d.get('sale_date', audit_date)} - {status_label})")
                         target_info = f"manual({', '.join(detail_strs)})"
 
-                    utang_tersimpan_matches.append({"nominal": nom_terpakai, "sender": sender_name or "Konsumen", "target": target_info})
+                    pakai_val = nom_terpakai if nom_terpakai > 0 else nom_asli
+                    utang_tersimpan_matches.append({"nominal": pakai_val, "sender": sender_name or "Konsumen", "target": target_info})
         except Exception:
             pass
 
@@ -1085,10 +1101,10 @@ def generate_daily_audit_report(request: Request, audit_date: str, db: Session =
     total_kredit_mutasi_match = sum(m["nominal"] for m in kredit_matches)
     total_utang_tersimpan_match = sum(m["nominal"] for m in utang_tersimpan_matches)
 
-    # Total seluruh mutasi yang berhasil dipasangkan (Debit + Kredit Bon + Utang Tersimpan)
+    # Total mutasi tercover
     total_semua_mutasi_match = total_debit_mutasi_match + total_kredit_mutasi_match + total_utang_tersimpan_match
 
-    # Jika uang mutasi bank (CR) masih tersisa / lebih besar dari yang terpakai -> Lebih Debit (+)
+    # Saldo lebih debit mutasi bank
     selisih_debit_mutasi = total_debit_mutasi_cr - total_semua_mutasi_match
 
     # 4. Pelanggan Utang Hari Ini
@@ -1209,15 +1225,15 @@ def generate_daily_audit_report(request: Request, audit_date: str, db: Session =
         selisih_html = "Rp 0 (Pas / Balance)"
         selisih_color = "#16a34a"
 
-    if sisa_selisih > 0:
-        sisa_selisih_html = f"Rp {sisa_selisih:,.0f} (lebih)"
-        sisa_color = "#0b7285"
-    elif sisa_selisih < 0:
-        sisa_selisih_html = f"Rp {abs(sisa_selisih):,.0f} (kurang)"
-        sisa_color = "#e11d48"
-    else:
+    if abs(sisa_selisih) < 1.0:
         sisa_selisih_html = "Rp 0 (Pas / Selesai)"
         sisa_color = "#16a34a"
+    elif sisa_selisih > 0:
+        sisa_selisih_html = f"Rp {sisa_selisih:,.0f} (lebih)"
+        sisa_color = "#0b7285"
+    else:
+        sisa_selisih_html = f"Rp {abs(sisa_selisih):,.0f} (kurang)"
+        sisa_color = "#e11d48"
 
     if selisih_debit_mutasi < 0:
         status_debit_mutasi_html = f"-Rp {abs(selisih_debit_mutasi):,.0f} (kurang debit)"
@@ -1456,7 +1472,6 @@ def generate_daily_audit_report(request: Request, audit_date: str, db: Session =
             pass
 
     return HTMLResponse(content=html_content)
-
 
 # ================= PERPUSTAKAAN DOKUMEN =================
 @router.get("/api/documents")
