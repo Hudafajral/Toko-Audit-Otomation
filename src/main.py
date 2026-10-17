@@ -12,10 +12,14 @@ app = FastAPI(title="Toko Rina Enterprise Audit WebApp")
 
 # Pastikan direktori static dibuat otomatis jika belum ada
 static_dir = Path("static")
-static_dir.mkdir(parents=True, exist_ok=True)
+try:
+    static_dir.mkdir(parents=True, exist_ok=True)
+except OSError:
+    pass
 
-app.mount("/static", StaticFiles(directory="static"), name="static")
-
+if static_dir.exists():
+    app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
+    
 # Daftarkan Router
 app.include_router(web_router)
 app.include_router(audit_api_router)
