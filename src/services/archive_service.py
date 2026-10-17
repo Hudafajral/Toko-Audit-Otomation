@@ -45,7 +45,6 @@ def save_daily_cash_files(
     tenant_id: str = "toko_1"
 ) -> Dict[str, str]:
     target_dir = Path(base_dir) / audit_date
-    target_dir.mkdir(parents=True, exist_ok=True)
 
     # 1. Uang Masuk Brankas
     f_vault_in = {
@@ -55,7 +54,6 @@ def save_daily_cash_files(
         "input_by": input_by
     }
     path_vault_in = target_dir / "uang_masuk_brankas.json"
-    path_vault_in.write_text(json.dumps(f_vault_in, indent=2, ensure_ascii=False), encoding="utf-8")
     sb_url_vault_in = upload_to_supabase(f"{tenant_id}/{audit_date}/uang_masuk_brankas.json", f_vault_in)
 
     # 2. Uang Keluar Laci
@@ -68,7 +66,6 @@ def save_daily_cash_files(
         "items": drawer_items
     }
     path_drawer_out = target_dir / "uang_keluar_laci.json"
-    path_drawer_out.write_text(json.dumps(f_drawer_out, indent=2, ensure_ascii=False), encoding="utf-8")
     sb_url_drawer_out = upload_to_supabase(f"{tenant_id}/{audit_date}/uang_keluar_laci.json", f_drawer_out)
 
     # 3. Uang Keluar Brankas
@@ -81,8 +78,16 @@ def save_daily_cash_files(
         "items": vault_items
     }
     path_vault_out = target_dir / "uang_keluar_brankas.json"
-    path_vault_out.write_text(json.dumps(f_vault_out, indent=2, ensure_ascii=False), encoding="utf-8")
     sb_url_vault_out = upload_to_supabase(f"{tenant_id}/{audit_date}/uang_keluar_brankas.json", f_vault_out)
+
+    # Simpan ke filesystem lokal hanya jika lingkungan mengizinkan (abaikan jika read-only Vercel)
+    try:
+        target_dir.mkdir(parents=True, exist_ok=True)
+        path_vault_in.write_text(json.dumps(f_vault_in, indent=2, ensure_ascii=False), encoding="utf-8")
+        path_drawer_out.write_text(json.dumps(f_drawer_out, indent=2, ensure_ascii=False), encoding="utf-8")
+        path_vault_out.write_text(json.dumps(f_vault_out, indent=2, ensure_ascii=False), encoding="utf-8")
+    except OSError:
+        pass
 
     return {
         "uang_masuk_brankas": sb_url_vault_in or str(path_vault_in),
