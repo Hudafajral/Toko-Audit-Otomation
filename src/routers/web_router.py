@@ -1571,13 +1571,20 @@ def delete_document(doc_id: int, db: Session = Depends(get_db)):
 
 @router.get("/api/documents/{doc_id}/download")
 def download_document(doc_id: int, request: Request, db: Session = Depends(get_db)):
+    # 1. Pastikan koneksi mengarah ke schema tenant yang benar (misal: toko_3)
+    db_name = extract_db_name_from_request(request)
+    if "sqlite" not in str(db.bind.url):
+        safe_name = "".join(c for c in db_name if c.isalnum() or c in ("_", "-")).lower() or DEFAULT_DB_KEY
+        db.execute(text(f'SET search_path TO "{safe_name}", public'))
+
+    # 2. Query dokumen di schema tenant
     doc = db.query(UploadedDocument).filter(UploadedDocument.id == doc_id).first()
     if not doc:
         raise HTTPException(status_code=404, detail="Dokumen tidak ditemukan")
 
     file_obj = Path(doc.file_path) if doc.file_path else None
 
-    # 1. Jika berkas fisik benar-benar ada di disk, buka langsung
+    # 3. Jika berkas fisik benar-benar ada di disk, buka langsung
     if file_obj and file_obj.exists():
         doc.status = "Terproses"
         db.commit()
@@ -1595,9 +1602,8 @@ def download_document(doc_id: int, request: Request, db: Session = Depends(get_d
             media_type="application/octet-stream"
         )
 
-    # 2. Fallback untuk Vercel: jika tipe HTML dan fisik tidak ada, render langsung dari Supabase
+    # 4. Fallback untuk Vercel: jika tipe HTML dan fisik tidak ada, render langsung dari Supabase
     if (doc.file_type or "").upper() == "HTML" or (doc.filename or "").endswith(".html"):
-        # Ekstrak tanggal audit dari nama file (misal: "laporan_audit_2026-10-05.html")
         date_match = re.search(r"\d{4}-\d{2}-\d{2}", doc.filename or doc.file_path or "")
         audit_date = date_match.group(0) if date_match else None
         
@@ -1605,11 +1611,9 @@ def download_document(doc_id: int, request: Request, db: Session = Depends(get_d
             doc.status = "Terproses"
             db.commit()
             
-            # Generate HTML laporan secara langsung
             rep_response = generate_daily_audit_report(request, audit_date, db, auto_sync=False)
             return HTMLResponse(
                 content=rep_response.body,
-                media_type="text/html; charset=utf-8",
                 headers={"Content-Disposition": f'inline; filename="{doc.filename}"'}
             )
 
