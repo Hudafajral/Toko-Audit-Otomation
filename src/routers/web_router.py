@@ -147,16 +147,17 @@ def delete_reconciliation_by_date(audit_date: str, request: Request, admin_opera
     folders = get_tenant_folders(db_name)
     target_raw = folders["raw"] / audit_date
 
-    # 1. Hapus 5 file JSON arsip folder tanggal terkait (abaikan jika di filesystem read-only serverless)
-    deleted_files = 0
+    # 1. Hapus arsip harian di database Supabase (PENTING AGAR SALDO KAS & MUTASI MENJADI 0)
+    db.query(DailyAuditArchive).filter(DailyAuditArchive.audit_date == audit_date).delete()
+
+    # 2. Hapus 5 file JSON arsip folder tanggal terkait (abaikan jika di filesystem read-only serverless)
     try:
         if target_raw.exists() and target_raw.is_dir():
             shutil.rmtree(target_raw, ignore_errors=True)
-            deleted_files = 5
     except OSError:
         pass
 
-    # 2. Hapus dokumen laporan resmi HTML di database dan perpustakaan dokumen
+    # 3. Hapus dokumen laporan resmi HTML di database dan perpustakaan dokumen
     doc_report = db.query(UploadedDocument).filter(UploadedDocument.doc_date == audit_date).all()
     for d in doc_report:
         try:
@@ -169,10 +170,10 @@ def delete_reconciliation_by_date(audit_date: str, request: Request, admin_opera
             pass
         db.delete(d)
 
-    # 3. Bersihkan pencatatan piutang yang tercatat dari tanggal penjualan tersebut
+    # 4. Bersihkan pencatatan piutang yang tercatat dari tanggal penjualan tersebut
     db.query(Receivable).filter(Receivable.sale_date == audit_date).delete()
 
-    # 4. Catat jejak rollback ke audit trail
+    # 5. Catat jejak rollback ke audit trail
     client_ip, client_loc, lat, lon = detect_client_info(request)
     db.add(AuditActionLog(
         username=admin_operator,
@@ -189,6 +190,7 @@ def delete_reconciliation_by_date(audit_date: str, request: Request, admin_opera
         "status": "SUCCESS", 
         "message": f"Seluruh data audit tanggal {audit_date} pada database {db_name} berhasil dihapus dan di-rollback!"
     }
+
 def detect_client_info(
     request: Request,
     lat: Optional[float] = None,
@@ -1887,7 +1889,7 @@ def get_folder_files(request: Request, date_str: str):
             safe_name = "".join(c for c in db_name if c.isalnum() or c in ("_", "-")).lower() or DEFAULT_DB_KEY
             db.execute(text(f'SET search_path TO "{safe_name}", public'))
 
-        # 1. Prioritaskan baca arsip dari database Supabase (anti hilang saat Koyeb redeploy)
+        # 1. Prioritaskan ambil dari tabel DailyAuditArchive di Supabase
         archive = db.query(DailyAuditArchive).filter(DailyAuditArchive.audit_date == date_str).first()
         if archive:
             return {
@@ -1898,7 +1900,15 @@ def get_folder_files(request: Request, date_str: str):
                 "mutasi_db_bank.json": archive.mutasi_db_bank or {}
             }
 
-    # 2. Fallback baca disk lokal jika data arsip lama belum tersimpan di tabel database
+        # 2. Cek apakah ada record piutang atau dokumen laporan di tanggal ini
+        # Jika tidak ada jejak sama sekali di database, anggap data sudah terhapus dan kembalikan kosong
+        has_receivables = db.query(Receivable).filter(Receivable.sale_date == date_str).first() is not None
+        has_documents = db.query(UploadedDocument).filter(UploadedDocument.doc_date == date_str).first() is not None
+
+        if not has_receivables and not has_documents:
+            return {}
+
+    # 3. Fallback disk lokal: hanya dibaca jika data memang belum dihapus di database
     folders = get_tenant_folders(db_name)
     folder = folders["raw"] / date_str
     if not folder.exists():
