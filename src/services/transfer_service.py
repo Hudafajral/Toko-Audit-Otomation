@@ -104,20 +104,24 @@ def reconcile_daily_bank_mutations(
 ) -> Dict[str, Any]:
     target_base = Path(base_dir) if base_dir else Path("data/raw")
     folder_path = target_base / audit_date
-    folder_path.mkdir(parents=True, exist_ok=True)
+
+    
     mb_file = folder_path / "mutasi_db_bank.json"
 
-    # PERTAHANKAN MATCH MANUAL SEBELUMNYA JIKA SUDAH ADA
+# PERTAHANKAN MATCH MANUAL SEBELUMNYA JIKA SUDAH ADA
     existing_manual_matches = {}
-    if mb_file.exists():
-        try:
+    try:
+        folder_path.mkdir(parents=True, exist_ok=True)
+        if mb_file.exists():
             old_data = json.loads(mb_file.read_text(encoding="utf-8"))
             for old_r in old_data.get("records", []):
                 if old_r.get("status_matching") == "MATCHED_MANUAL":
                     key = f"{old_r.get('tanggal')}_{old_r.get('keterangan')}_{float(old_r.get('nominal', 0.0))}"
                     existing_manual_matches[key] = old_r
-        except Exception:
-            pass
+    except OSError:
+        pass
+    except Exception:
+        pass
 
     db.flush()
 
@@ -307,8 +311,10 @@ def reconcile_daily_bank_mutations(
         "total_unmatched_cr": len(unmatched_transfers),
         "records": reconciled_records
     }
-    mb_file.write_text(json.dumps(output_data, indent=2, ensure_ascii=False), encoding="utf-8")
-
+    try:
+        mb_file.write_text(json.dumps(output_data, indent=2, ensure_ascii=False), encoding="utf-8")
+    except OSError:
+        pass
     return {
         "status": "SUCCESS",
         "total_mutations": len(mutations),
