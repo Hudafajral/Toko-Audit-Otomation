@@ -53,7 +53,11 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 
 DOCS_DIR = Path("data/documents")
-DOCS_DIR.mkdir(parents=True, exist_ok=True)
+
+try:
+    DOCS_DIR.mkdir(parents=True, exist_ok=True)
+except OSError:
+    pass
 
 
 # Model payload registrasi DB baru
