@@ -1747,8 +1747,11 @@ def batch_manual_match(payload: BatchManualMatchPayload, request: Request, db: S
                 r["has_leftover"] = False
 
     data["records"] = records
-    mb_file.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
-
+    # Bungkus penulisan file arsip lokal agar tidak crash di serverless
+    try:
+        mb_file.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+    except OSError:
+        pass
     client_ip, client_loc, lat, lon = detect_client_info(request)
     db.add(AuditActionLog(
         username=payload.username,
