@@ -1570,28 +1570,50 @@ def delete_document(doc_id: int, db: Session = Depends(get_db)):
 
 
 @router.get("/api/documents/{doc_id}/download")
-def download_document(doc_id: int, db: Session = Depends(get_db)):
+def download_document(doc_id: int, request: Request, db: Session = Depends(get_db)):
     doc = db.query(UploadedDocument).filter(UploadedDocument.id == doc_id).first()
-    if not doc or not Path(doc.file_path).exists():
-        raise HTTPException(status_code=404, detail="Berkas file tidak ditemukan di sistem")
+    if not doc:
+        raise HTTPException(status_code=404, detail="Dokumen tidak ditemukan")
 
-    doc.status = "Terproses"
-    db.commit()
+    file_obj = Path(doc.file_path) if doc.file_path else None
 
-    if (doc.file_type or "").upper() == "HTML":
+    # 1. Jika berkas fisik benar-benar ada di disk, buka langsung
+    if file_obj and file_obj.exists():
+        doc.status = "Terproses"
+        db.commit()
+
+        if (doc.file_type or "").upper() == "HTML":
+            return FileResponse(
+                path=str(file_obj), 
+                filename=doc.filename, 
+                media_type="text/html; charset=utf-8",
+                content_disposition_type="inline"
+            )
         return FileResponse(
-            path=doc.file_path, 
+            path=str(file_obj), 
             filename=doc.filename, 
-            media_type="text/html; charset=utf-8",
-            content_disposition_type="inline"
+            media_type="application/octet-stream"
         )
 
-    return FileResponse(
-        path=doc.file_path, 
-        filename=doc.filename, 
-        media_type="application/octet-stream"
-    )
+    # 2. Fallback untuk Vercel: jika tipe HTML dan fisik tidak ada, render langsung dari Supabase
+    if (doc.file_type or "").upper() == "HTML" or (doc.filename or "").endswith(".html"):
+        # Ekstrak tanggal audit dari nama file (misal: "laporan_audit_2026-10-05.html")
+        date_match = re.search(r"\d{4}-\d{2}-\d{2}", doc.filename or doc.file_path or "")
+        audit_date = date_match.group(0) if date_match else None
+        
+        if audit_date:
+            doc.status = "Terproses"
+            db.commit()
+            
+            # Generate HTML laporan secara langsung
+            rep_response = generate_daily_audit_report(request, audit_date, db, auto_sync=False)
+            return HTMLResponse(
+                content=rep_response.body,
+                media_type="text/html; charset=utf-8",
+                headers={"Content-Disposition": f'inline; filename="{doc.filename}"'}
+            )
 
+    raise HTTPException(status_code=404, detail="Berkas file tidak ditemukan di sistem")
 
 class StatusTogglePayload(BaseModel):
     status: str
