@@ -147,11 +147,14 @@ def delete_reconciliation_by_date(audit_date: str, request: Request, admin_opera
     folders = get_tenant_folders(db_name)
     target_raw = folders["raw"] / audit_date
 
-    # 1. Hapus 5 file JSON arsip folder tanggal terkait
+    # 1. Hapus 5 file JSON arsip folder tanggal terkait (abaikan jika di filesystem read-only serverless)
     deleted_files = 0
-    if target_raw.exists() and target_raw.is_dir():
-        shutil.rmtree(target_raw)
-        deleted_files = 5
+    try:
+        if target_raw.exists() and target_raw.is_dir():
+            shutil.rmtree(target_raw, ignore_errors=True)
+            deleted_files = 5
+    except OSError:
+        pass
 
     # 2. Hapus dokumen laporan resmi HTML di database dan perpustakaan dokumen
     doc_report = db.query(UploadedDocument).filter(UploadedDocument.doc_date == audit_date).all()
@@ -159,7 +162,9 @@ def delete_reconciliation_by_date(audit_date: str, request: Request, admin_opera
         try:
             p = Path(d.file_path)
             if p.exists():
-                p.unlink()
+                p.unlink(missing_ok=True)
+        except OSError:
+            pass
         except Exception:
             pass
         db.delete(d)
@@ -184,8 +189,6 @@ def delete_reconciliation_by_date(audit_date: str, request: Request, admin_opera
         "status": "SUCCESS", 
         "message": f"Seluruh data audit tanggal {audit_date} pada database {db_name} berhasil dihapus dan di-rollback!"
     }
-
-
 def detect_client_info(
     request: Request,
     lat: Optional[float] = None,
