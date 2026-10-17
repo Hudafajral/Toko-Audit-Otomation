@@ -885,7 +885,12 @@ async def run_audit(
         total_cash_pdf = float(pdf_data.get("total_cash", 0.0))
 
         raw_discrepancy = total_cash_fisik_murni - total_cash_pdf
-        net_remaining_discrepancy = raw_discrepancy - cash_adjustment
+
+        # Jika selisih minus (uang fisik kurang), penyesuaian positif akan menutup kekurangan tersebut
+        if raw_discrepancy < 0 and cash_adjustment > 0:
+            net_remaining_discrepancy = raw_discrepancy + cash_adjustment
+        else:
+            net_remaining_discrepancy = raw_discrepancy - cash_adjustment
 
         # Hitung net mutasi transfer bank hari ini (CR dikurangi DB)
         net_tf_today = sum(

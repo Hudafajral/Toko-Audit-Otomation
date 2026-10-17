@@ -109,17 +109,26 @@ def reconcile_daily_bank_mutations(
     mb_file = folder_path / "mutasi_db_bank.json"
 
 # PERTAHANKAN MATCH MANUAL SEBELUMNYA JIKA SUDAH ADA
+    # PERTAHANKAN MATCH MANUAL SEBELUMNYA DARI SUPABASE & FILE LOKAL
     existing_manual_matches = {}
+
+    # 1. Cek dari Supabase DailyAuditArchive terlebih dahulu
+    from src.models.audit_models import DailyAuditArchive
+    arch = db.query(DailyAuditArchive).filter(DailyAuditArchive.audit_date == audit_date).first()
+    if arch and arch.mutasi_db_bank:
+        for old_r in arch.mutasi_db_bank.get("records", []):
+            if old_r.get("status_matching") == "MATCHED_MANUAL":
+                key = f"{old_r.get('tanggal')}_{old_r.get('keterangan')}_{float(old_r.get('original_nominal', old_r.get('nominal', 0.0)))}"
+                existing_manual_matches[key] = old_r
+
+    # 2. Cek file lokal jika ada
     try:
-        folder_path.mkdir(parents=True, exist_ok=True)
         if mb_file.exists():
             old_data = json.loads(mb_file.read_text(encoding="utf-8"))
             for old_r in old_data.get("records", []):
                 if old_r.get("status_matching") == "MATCHED_MANUAL":
-                    key = f"{old_r.get('tanggal')}_{old_r.get('keterangan')}_{float(old_r.get('nominal', 0.0))}"
+                    key = f"{old_r.get('tanggal')}_{old_r.get('keterangan')}_{float(old_r.get('original_nominal', old_r.get('nominal', 0.0)))}"
                     existing_manual_matches[key] = old_r
-    except OSError:
-        pass
     except Exception:
         pass
 
