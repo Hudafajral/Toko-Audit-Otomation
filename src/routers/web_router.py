@@ -1664,16 +1664,25 @@ class BatchManualMatchPayload(BaseModel):
 
 @router.post("/api/batch-manual-match")
 def batch_manual_match(payload: BatchManualMatchPayload, request: Request, db: Session = Depends(get_db)):
-    # 1. Pastikan mengarah ke folder tenant toko yang aktif
     db_name = extract_db_name_from_request(request)
     tenant_folders = get_tenant_folders(db_name)
     folder = tenant_folders["raw"] / payload.audit_date
     mb_file = folder / "mutasi_db_bank.json"
-    
-    if not mb_file.exists():
+
+    # 1. Prioritaskan ambil data mutasi dari Supabase (DailyAuditArchive)
+    archive_entry = db.query(DailyAuditArchive).filter(DailyAuditArchive.audit_date == payload.audit_date).first()
+    data = None
+    if archive_entry and archive_entry.mutasi_db_bank:
+        data = dict(archive_entry.mutasi_db_bank)
+    elif mb_file.exists():
+        try:
+            data = json.loads(mb_file.read_text(encoding="utf-8"))
+        except Exception:
+            data = None
+
+    if not data:
         raise HTTPException(status_code=404, detail="Berkas mutasi bank pada tanggal ini tidak ditemukan")
 
-    data = json.loads(mb_file.read_text(encoding="utf-8"))
     records = data.get("records", [])
 
     total_pool_available = 0.0
@@ -1754,11 +1763,23 @@ def batch_manual_match(payload: BatchManualMatchPayload, request: Request, db: S
                 r["has_leftover"] = False
 
     data["records"] = records
-    # Bungkus penulisan file arsip lokal agar tidak crash di serverless
+
+    # 2. Simpan langsung perubahan JSON mutasi ke tabel DailyAuditArchive di Supabase
+    if archive_entry:
+        archive_entry.mutasi_db_bank = dict(data)
+    else:
+        archive_entry = DailyAuditArchive(
+            audit_date=payload.audit_date,
+            mutasi_db_bank=dict(data)
+        )
+        db.add(archive_entry)
+
+    # 3. Penulisan ke file disk lokal hanya jika filesystem mengizinkan
     try:
         mb_file.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
     except OSError:
         pass
+
     client_ip, client_loc, lat, lon = detect_client_info(request)
     db.add(AuditActionLog(
         username=payload.username,
@@ -1771,12 +1792,14 @@ def batch_manual_match(payload: BatchManualMatchPayload, request: Request, db: S
     ))
     db.commit()
 
-    sync_audit_report_to_library(request, payload.audit_date, db)
-    for aff_d in affected_dates:
-        sync_audit_report_to_library(request, aff_d, db)
+    try:
+        sync_audit_report_to_library(request, payload.audit_date, db)
+        for aff_d in affected_dates:
+            sync_audit_report_to_library(request, aff_d, db)
+    except OSError:
+        pass
 
     return {"status": "SUCCESS", "matched_total": total_used, "leftover_total": remaining_pool}
-
 # ================= MASTER DATA PELANGGAN =================
 # ================= MASTER DATA PELANGGAN =================
 class CustomerPayload(BaseModel):
