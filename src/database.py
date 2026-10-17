@@ -9,12 +9,17 @@ from sqlalchemy.orm import declarative_base, sessionmaker, Session
 from fastapi import Request
 from pathlib import Path
 from dotenv import load_dotenv
+from sqlalchemy.pool import NullPool
 
 load_dotenv()
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 DATA_DIR = BASE_DIR / "data"
-DATA_DIR.mkdir(parents=True, exist_ok=True)
+
+try:
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+except OSError:
+    pass
 
 Base = declarative_base()
 
@@ -38,7 +43,14 @@ def get_base_engine():
         if "sqlite" in DATABASE_URL:
             _engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
         else:
-            _engine = create_engine(DATABASE_URL, pool_pre_ping=True, pool_size=10, max_overflow=20)
+            _engine = create_engine(
+                DATABASE_URL,
+                poolclass=NullPool,
+                connect_args={
+                    "connect_timeout": 5,
+                    "sslmode": "require"
+                }
+            )
     return _engine
 
 def init_tenant_schema(schema_name: str):
