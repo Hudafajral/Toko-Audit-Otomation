@@ -635,67 +635,37 @@ def get_dashboard_summary(request: Request, db_param: Optional[str] = None):
         init_tf = float(getattr(cfg, "initial_transfer_balance", 0.0) or 0.0) if cfg else 0.0
         init_debt = float(getattr(cfg, "initial_debt_balance", 0.0) or 0.0) if cfg else 0.0
 
-        # 3. AMBIL ARSIP DARI SUPABASE (ANTI HILANG SAAT KOYEB REDEPLOY)
+        # 3. Ambil arsip resmi murni dari tabel Supabase
         db_archives = tenant_db.query(DailyAuditArchive).order_by(DailyAuditArchive.audit_date.desc()).all()
         archive_map = {a.audit_date: a for a in db_archives}
 
-        # Gabungkan tanggal dari DB Supabase dan folder fisik lokal jika masih ada
-        folders = get_tenant_folders(db_name)
-        disk_raw_dirs = [d.name for d in folders["raw"].glob("*") if d.is_dir()] if folders["raw"].exists() else []
-        all_dates = sorted(list(set(list(archive_map.keys()) + disk_raw_dirs)), reverse=True)
+        # Hanya gunakan tanggal yang tercatat valid di Supabase
+        all_dates = sorted(list(archive_map.keys()), reverse=True)
 
         total_kumulatif_cash_brankas = init_cash
         total_kumulatif_net_tf = init_tf
         unmatched_mutations = []
 
-        # 4. Akumulasi saldo kas dan transfer bank
+        # 4. Akumulasi saldo kas dan transfer bank murni dari Supabase
         for dt_str in all_dates:
-            # Prioritaskan data dari Supabase DB
-            if dt_str in archive_map:
-                arch = archive_map[dt_str]
-                total_kumulatif_cash_brankas += float(arch.vault_cash_in or 0.0)
-                total_kumulatif_net_tf += float(arch.net_bank_mutation or 0.0)
+            arch = archive_map[dt_str]
+            total_kumulatif_cash_brankas += float(arch.vault_cash_in or 0.0)
+            total_kumulatif_net_tf += float(arch.net_bank_mutation or 0.0)
 
-                # Ambil daftar mutasi bank tanggal terbaru untuk dropdown manual match
-                if not unmatched_mutations and arch.mutasi_db_bank:
-                    mut_records = arch.mutasi_db_bank.get("records", []) if isinstance(arch.mutasi_db_bank, dict) else []
-                    for idx, r in enumerate(mut_records):
-                        status_m = str(r.get("status_matching", "")).upper()
-                        tipe_m = str(r.get("tipe", r.get("mutation_type", "CR"))).upper()
-                        if tipe_m == "CR" and status_m not in ["MATCHED_SALES_DEBIT", "K_DEBIT_MATCH", "MATCHED_MANUAL"]:
-                            unmatched_mutations.append({
-                                "id": idx,
-                                "nominal": float(r.get("sisa_nominal", r.get("nominal", r.get("amount", 0.0)))),
-                                "original_nominal": float(r.get("original_nominal", r.get("nominal", r.get("amount", 0.0)))),
-                                "keterangan": r.get("keterangan", "-"),
-                                "has_leftover": r.get("has_leftover", False)
-                            })
-            else:
-                # Fallback file lokal (jika arsip lama belum masuk tabel DB)
-                date_folder = folders["raw"] / dt_str
-                vm_path = date_folder / "uang_masuk_brankas.json"
-                if vm_path.exists():
-                    try:
-                        vm_data = json.loads(vm_path.read_text(encoding="utf-8"))
-                        val = float(vm_data.get("nominal") or vm_data.get("uang_masuk_brankas") or 0.0)
-                        total_kumulatif_cash_brankas += val
-                    except Exception:
-                        pass
-
-                mb_path = date_folder / "mutasi_db_bank.json"
-                if mb_path.exists():
-                    try:
-                        mb_raw = json.loads(mb_path.read_text(encoding="utf-8"))
-                        records = mb_raw if isinstance(mb_raw, list) else mb_raw.get("records", [])
-                        for r in records:
-                            tipe = str(r.get("mutation_type") or r.get("type") or r.get("tipe") or "").upper()
-                            nominal = float(r.get("amount") if "amount" in r else r.get("nominal", 0.0))
-                            if tipe == "CR":
-                                total_kumulatif_net_tf += nominal
-                            elif tipe == "DB":
-                                total_kumulatif_net_tf -= nominal
-                    except Exception:
-                        pass
+            # Ambil daftar mutasi bank tanggal terbaru untuk dropdown manual match
+            if not unmatched_mutations and arch.mutasi_db_bank:
+                mut_records = arch.mutasi_db_bank.get("records", []) if isinstance(arch.mutasi_db_bank, dict) else []
+                for idx, r in enumerate(mut_records):
+                    status_m = str(r.get("status_matching", "")).upper()
+                    tipe_m = str(r.get("tipe", r.get("mutation_type", "CR"))).upper()
+                    if tipe_m == "CR" and status_m not in ["MATCHED_SALES_DEBIT", "K_DEBIT_MATCH", "MATCHED_MANUAL"]:
+                        unmatched_mutations.append({
+                            "id": idx,
+                            "nominal": float(r.get("sisa_nominal", r.get("nominal", r.get("amount", 0.0)))),
+                            "original_nominal": float(r.get("original_nominal", r.get("nominal", r.get("amount", 0.0)))),
+                            "keterangan": r.get("keterangan", "-"),
+                            "has_leftover": r.get("has_leftover", False)
+                        })
 
         pending_users = tenant_db.query(User).filter(User.status_approval == "PENDING").count()
 
@@ -714,7 +684,6 @@ def get_dashboard_summary(request: Request, db_param: Optional[str] = None):
                 "debt": init_debt
             }
         }
-
 # ================= HELPER SINKRONISASI LAPORAN KE PERPUSTAKAAN =================
 def sync_audit_report_to_library(request: Request, audit_date: str, db: Session, html_content: Optional[str] = None) -> None:
     db_name = extract_db_name_from_request(request)
