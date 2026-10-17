@@ -658,13 +658,18 @@ def get_dashboard_summary(request: Request, db_param: Optional[str] = None):
                 for idx, r in enumerate(mut_records):
                     status_m = str(r.get("status_matching", "")).upper()
                     tipe_m = str(r.get("tipe", r.get("mutation_type", "CR"))).upper()
-                    if tipe_m == "CR" and status_m not in ["MATCHED_SALES_DEBIT", "K_DEBIT_MATCH", "MATCHED_MANUAL"]:
+                    
+                    sisa_nom = float(r.get("sisa_nominal", r.get("nominal", r.get("amount", 0.0))))
+                    has_leftover = bool(r.get("has_leftover", False)) or (status_m == "MATCHED_MANUAL" and sisa_nom > 1.0)
+                    
+                    # Munculkan jika belum dimatch, ATAU sudah dimatch manual tapi masih ada sisa dana
+                    if tipe_m == "CR" and (status_m not in ["MATCHED_SALES_DEBIT", "K_DEBIT_MATCH", "MATCHED_MANUAL"] or has_leftover):
                         unmatched_mutations.append({
                             "id": idx,
-                            "nominal": float(r.get("sisa_nominal", r.get("nominal", r.get("amount", 0.0)))),
+                            "nominal": sisa_nom,
                             "original_nominal": float(r.get("original_nominal", r.get("nominal", r.get("amount", 0.0)))),
-                            "keterangan": r.get("keterangan", "-"),
-                            "has_leftover": r.get("has_leftover", False)
+                            "keterangan": f"{r.get('keterangan', '-')} (Sisa Rp {sisa_nom:,.0f})" if has_leftover else r.get("keterangan", "-"),
+                            "has_leftover": has_leftover
                         })
 
         pending_users = tenant_db.query(User).filter(User.status_approval == "PENDING").count()
