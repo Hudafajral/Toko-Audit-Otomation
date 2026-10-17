@@ -107,9 +107,12 @@ def get_tenant_folders(db_name: str = DEFAULT_DB_KEY):
     docs_dir = tenant_dir / "documents"
     raw_dir = tenant_dir / "raw"
     
-    tenant_dir.mkdir(parents=True, exist_ok=True)
-    docs_dir.mkdir(parents=True, exist_ok=True)
-    raw_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        tenant_dir.mkdir(parents=True, exist_ok=True)
+        docs_dir.mkdir(parents=True, exist_ok=True)
+        raw_dir.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        pass
     
     return {
         "tenant_dir": tenant_dir,
