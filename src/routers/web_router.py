@@ -759,11 +759,10 @@ async def run_audit(
         tenant_folders = get_tenant_folders(db_name)
         target_archive_dir = tenant_folders["raw"] / audit_date
 
-        # Cek apakah transaksi sudah ada di DB Supabase atau disk lokal
+        # Cek apakah transaksi sudah ada di DB Supabase
         existing_in_db = db.query(DailyAuditArchive).filter(DailyAuditArchive.audit_date == audit_date).first()
-        existing_marker = target_archive_dir / "uang_masuk_brankas.json"
 
-        if (existing_in_db or existing_marker.exists()) and not override_existing:
+        if existing_in_db and not override_existing:
             raise HTTPException(
                 status_code=409,
                 detail=f"Laporan transaksi tanggal {audit_date} sudah pernah diaudit pada database {db_name}. Centang opsi timpa data jika ingin memproses ulang!"
@@ -775,24 +774,34 @@ async def run_audit(
         laci_items = json.loads(laci_items_json) if laci_items_json else []
         brankas_items = json.loads(brankas_items_json) if brankas_items_json else []
 
-        # 1. Simpan kas fisik ke folder tenant aktif (lokal runtime)
-        save_daily_cash_files(
-            audit_date=audit_date,
-            vault_in=vault_in,
-            drawer_items=laci_items,
-            vault_items=brankas_items,
-            input_by=username,
-            base_dir=str(tenant_folders["raw"])
-        )
+        # 1. Simpan kas fisik (abaikan jika filesystem lokal serverless read-only)
+        try:
+            save_daily_cash_files(
+                audit_date=audit_date,
+                vault_in=vault_in,
+                drawer_items=laci_items,
+                vault_items=brankas_items,
+                input_by=username,
+                base_dir=str(tenant_folders["raw"]),
+                tenant_id=db_name
+            )
+        except OSError:
+            pass
         
-        pdf_summary_file = target_archive_dir / "penjualan_pos_pdf.json"
         pdf_summary_data = {
             "total_cash": float(pdf_data.get("total_cash", 0.0)),
             "total_debit": float(pdf_data.get("total_debit", 0.0)),
             "total_credit": float(pdf_data.get("total_credit", 0.0)),
             "records": today_sales
         }
-        pdf_summary_file.write_text(json.dumps(pdf_summary_data, indent=2, ensure_ascii=False), encoding="utf-8")
+
+        # Simpan file JSON penjualan jika disk mengizinkan
+        try:
+            target_archive_dir.mkdir(parents=True, exist_ok=True)
+            pdf_summary_file = target_archive_dir / "penjualan_pos_pdf.json"
+            pdf_summary_file.write_text(json.dumps(pdf_summary_data, indent=2, ensure_ascii=False), encoding="utf-8")
+        except OSError:
+            pass
 
         selected_cash_debt_ids = []
         try:
@@ -800,18 +809,26 @@ async def run_audit(
         except Exception:
             pass
 
-        adj_file = target_archive_dir / "penyesuaian_kas.json"
         adj_data = {
             "nominal": cash_adjustment,
             "keterangan": cash_adjustment_note or "-",
             "receivable_ids_settled": selected_cash_debt_ids,
             "tanggal": audit_date
         }
-        adj_file.write_text(json.dumps(adj_data, indent=2, ensure_ascii=False), encoding="utf-8")
 
-        # Simpan mutasi bank sementara ke folder arsip tenant
-        bank_file = target_archive_dir / "mutasi_db_bank.json"
-        bank_file.write_text(json.dumps(bank_mutations, indent=2, ensure_ascii=False), encoding="utf-8")
+        # Simpan file JSON penyesuaian jika disk mengizinkan
+        try:
+            adj_file = target_archive_dir / "penyesuaian_kas.json"
+            adj_file.write_text(json.dumps(adj_data, indent=2, ensure_ascii=False), encoding="utf-8")
+        except OSError:
+            pass
+
+        # Simpan mutasi bank sementara jika disk mengizinkan
+        try:
+            bank_file = target_archive_dir / "mutasi_db_bank.json"
+            bank_file.write_text(json.dumps(bank_mutations, indent=2, ensure_ascii=False), encoding="utf-8")
+        except OSError:
+            pass
 
         record_daily_credit_sales(db, audit_date, today_sales)
         db.commit()
@@ -843,16 +860,18 @@ async def run_audit(
             r["mutation_type"] = r.get("tipe", "CR")
             r["amount"] = r.get("nominal", 0.0)
 
-        # Simpan struktur records ke arsip tenant
         output_payload = {
             "audit_date": audit_date,
             "total_records": len(final_records),
             "records": final_records
         }
 
-        # Simpan ke mutasi_db_bank.json di disk lokal
-        bank_file = target_archive_dir / "mutasi_db_bank.json"
-        bank_file.write_text(json.dumps(output_payload, indent=2, ensure_ascii=False), encoding="utf-8")
+        # Simpan ke mutasi_db_bank.json di disk lokal jika didukung
+        try:
+            bank_file = target_archive_dir / "mutasi_db_bank.json"
+            bank_file.write_text(json.dumps(output_payload, indent=2, ensure_ascii=False), encoding="utf-8")
+        except OSError:
+            pass
 
         # Perhitungan uang fisik & selisih
         total_laci = sum(float(i.get("qty", 1.0)) * float(i.get("unit_price", 0.0)) for i in laci_items)
@@ -910,9 +929,13 @@ async def run_audit(
         ))
         db.commit()
 
-        sync_audit_report_to_library(request, audit_date, db)
-        for aff_date in affected_dates:
-            sync_audit_report_to_library(request, aff_date, db)
+        # Sinkronkan laporan audit (abaikan jika write HTML lokal terblokir)
+        try:
+            sync_audit_report_to_library(request, audit_date, db)
+            for aff_date in affected_dates:
+                sync_audit_report_to_library(request, aff_date, db)
+        except OSError:
+            pass
 
         return {
             "status": "SUCCESS",
@@ -929,7 +952,6 @@ async def run_audit(
     except Exception as exc:
         db.rollback()
         raise HTTPException(status_code=500, detail=f"Gagal memproses audit: {str(exc)}")
-
 
 # ================= GENERATOR LAPORAN AUDIT HARIAN =================
 @router.get("/api/reports/daily-audit/{audit_date}", response_class=HTMLResponse)
