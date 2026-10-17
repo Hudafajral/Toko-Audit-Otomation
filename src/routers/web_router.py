@@ -690,12 +690,18 @@ def sync_audit_report_to_library(request: Request, audit_date: str, db: Session,
     folders = get_tenant_folders(db_name)
     docs_dir = folders["docs"]
     if not html_content:
-        resp = generate_daily_audit_report(request,audit_date, db, auto_sync=False)
+        resp = generate_daily_audit_report(request, audit_date, db, auto_sync=False)
         html_content = resp.body.decode("utf-8")
 
     filename = f"Laporan_Audit_{audit_date}.html"
     file_path = docs_dir / filename
-    file_path.write_text(html_content, encoding="utf-8")
+    
+    # Abaikan jika penulisan ke disk diblokir serverless
+    try:
+        file_path.write_text(html_content, encoding="utf-8")
+    except OSError:
+        pass
+
     size_kb = round(len(html_content.encode("utf-8")) / 1024, 1)
 
     doc = db.query(UploadedDocument).filter(
@@ -1451,7 +1457,12 @@ async def upload_document(
     safe_name = f"{doc_date}_{int(datetime.utcnow().timestamp())}_{file.filename}"
     saved_path = DOCS_DIR / safe_name
     content = await file.read()
-    saved_path.write_bytes(content)
+    
+    # Abaikan penulisan disk jika berjalan di lingkungan serverless read-only
+    try:
+        saved_path.write_bytes(content)
+    except OSError:
+        pass
 
     size_kb = round(len(content) / 1024, 1)
     extra = "1 halaman" if ftype == "PDF" else ("File Data" if ftype == "CSV" else "Laporan Audit Resmi")
