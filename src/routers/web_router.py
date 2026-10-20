@@ -1083,8 +1083,13 @@ def generate_daily_audit_report(request: Request, audit_date: str, db: Session =
                 if tipe_m == "CR":
                     total_debit_mutasi_cr += nom_asli
 
-                sender_name = desc.split("WS95011")[-1].strip() if "WS95011" in desc else desc
-                sender_name = sender_name.replace("TRSF E-BANKING CR", "").replace("0510/FTSCY/WS95271", "").replace("0510/FTSCY/WS95031", "").strip()[:24]
+                # 1. Bersihkan prefix e-banking BCA & kode terminal/tanggal apapun secara dinamis
+                cleaned_desc = re.sub(r"^TRSF E-BANKING (?:CR|DB)\s+[A-Z0-9/]+\s+", "", desc.strip())
+                # 2. Hapus format angka desimal .00
+                cleaned_desc = re.sub(r"^\d+\.\d{2}", "", cleaned_desc).strip()
+                # 3. Pisahkan jika ada berita/keterangan transfer (BCA memisahkan nama pengirim dengan 2 spasi atau lebih)
+                parts_desc = re.split(r"\s{2,}", cleaned_desc)
+                sender_name = parts_desc[-1].strip() if parts_desc else (cleaned_desc or "Konsumen")
 
                 settled_details = r.get("settled_details", [])
 
@@ -1586,13 +1591,25 @@ def edit_document(payload: EditDocumentPayload, db: Session = Depends(get_db)):
 
 
 @router.delete("/api/documents/{doc_id}")
-def delete_document(doc_id: int, db: Session = Depends(get_db)):
+def delete_document(doc_id: int, request: Request, db: Session = Depends(get_db)):
     doc = db.query(UploadedDocument).filter(UploadedDocument.id == doc_id).first()
     if not doc:
         raise HTTPException(status_code=404, detail="Dokumen tidak ditemukan")
 
+    file_path_str = doc.file_path or ""
+
+    # Hapus file fisik langsung dari Supabase Storage Bucket
+    if supabase_client and ("audit-files" in file_path_str or file_path_str.startswith("http")):
+        try:
+            # Mengambil path relatif di bucket, contoh: toko_3/2026-10-20_1792438187_file.pdf
+            relative_path = file_path_str.split("audit-files/")[-1].split("?")[0]
+            supabase_client.storage.from_("audit-files").remove([relative_path])
+        except Exception as e:
+            print(f"[Supabase Storage Delete Error]: {e}")
+
+    # Hapus file lokal jika tersimpan di disk
     try:
-        p = Path(doc.file_path)
+        p = Path(file_path_str)
         if p.exists():
             p.unlink()
     except Exception:
@@ -1601,7 +1618,6 @@ def delete_document(doc_id: int, db: Session = Depends(get_db)):
     db.delete(doc)
     db.commit()
     return {"status": "SUCCESS", "message": f"Dokumen '{doc.filename}' berhasil dihapus!"}
-
 
 @router.get("/api/documents/{doc_id}/download")
 def download_document(doc_id: int, request: Request, db: Session = Depends(get_db)):

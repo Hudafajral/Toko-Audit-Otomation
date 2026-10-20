@@ -142,22 +142,26 @@ def parse_bank_mutation_csv(file_source: Union[io.BytesIO, bytes, str]) -> List[
         "NO. REKENING", "NO REKENING", "NOMOR REKENING", "ACCOUNT",
         "SALDO AWAL", "SALDO AKHIR", "MUTASI KREDIT", "MUTASI DEBET",
         "TOTAL KREDIT", "TOTAL DEBET", "KREDIT =", "DEBET =",
-        "RINGKASAN", "TANGGAL", "PERIODE", "MATA UANG"
+        "RINGKASAN", "PERIODE", "MATA UANG"
     ]
 
     for row in reader:
         if not row or len(row) < 3:
             continue
-        line_str = " ".join(row).upper()
+        
+        # 2. Lewati hanya baris header judul tabel kolom pertama
+        if row[0].strip().upper() in ["TANGGAL", "DATE"]:
+            continue
 
+        line_str = " ".join(row).upper()
         if any(keyword in line_str for keyword in EXCLUDE_KEYWORDS):
             continue
 
-        trx_date = row[0].strip()
-        # Baris transaksi mutasi bank wajib memuat format tanggal (misal 05/10/2026 atau 05/10)
-        if not re.search(r"\d{1,2}/\d{1,2}", trx_date):
+        trx_date = row[0].strip().replace("'", "")
+        # 3. Izinkan tanggal DD/MM/YYYY serta transaksi hari berjalan ('PEND)
+        if not (re.search(r"\d{1,2}/\d{1,2}", trx_date) or "PEND" in trx_date.upper()):
             continue
-
+        
         desc = row[1].strip() if len(row) > 1 else ""
         amount = 0.0
         m_type = "CR"

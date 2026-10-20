@@ -52,13 +52,31 @@ def extract_block_code(text_val: str) -> Optional[str]:
 def extract_sender_name(desc_text: str) -> str:
     """
     Mengekstrak nama pengirim asli dari teks mutasi bank BCA.
-    Mengambil bagian setelah nominal dan pecahan desimal (.00).
+    Memisahkan berita transfer (jika ada) dan mengambil nama pemilik rekening di ujung kanan.
     """
     raw = str(desc_text or "").strip()
+    
+    # 1. Ambil teks setelah nominal dan desimal .00
     m = re.search(r"\d+\.00\s*(.*)", raw)
     if m and m.group(1).strip():
-        return m.group(1).strip()
+        trailing = m.group(1).strip()
+        
+        # Pisahkan jika ada spasi ganda (format standar berita BCA)
+        parts = re.split(r"\s{2,}", trailing)
+        if len(parts) >= 2:
+            return parts[-1].strip()
 
+        # Bersihkan kata-kata pesanan umum jika konsumen hanya memberi 1 spasi
+        cleaned = re.sub(
+            r"^(?:(?:aqua|pristine|oasis|vit|air|galon|gas|box|pcs|blok|tgl|tanggal)\s*|\d+\s*)+", 
+            "", 
+            trailing, 
+            flags=re.IGNORECASE
+        ).strip()
+        
+        return cleaned or trailing
+
+    # 2. Fallback untuk transfer tanpa format desimal baku
     parts = raw.split("/")
     if len(parts) > 1 and parts[-1].strip():
         return parts[-1].strip()
