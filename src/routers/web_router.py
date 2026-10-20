@@ -20,12 +20,15 @@ from __future__ import annotations
 import io
 import json
 import re
+import os
 import urllib.request
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
-from fastapi.responses import HTMLResponse, FileResponse
+from dotenv import load_dotenv
+from fastapi.responses import HTMLResponse, FileResponse, RedirectResponse
+load_dotenv()
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
 from sqlalchemy import text
@@ -48,6 +51,15 @@ from src.services.transfer_service import reconcile_daily_bank_mutations
 from src.services.anomaly_ml_service import evaluate_daily_audit_risks
 from src.services.archive_service import save_daily_cash_files
 
+try:
+    from supabase import create_client, Client
+    SUPABASE_URL = os.getenv("SUPABASE_URL")
+    SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY") or os.getenv("SUPABASE_KEY")
+    supabase_client: Client = create_client(SUPABASE_URL, SUPABASE_KEY) if (SUPABASE_URL and SUPABASE_KEY) else None
+except Exception as e:
+    print(f"[Supabase Init Error]: {e}")
+    supabase_client = None
+    
 router = APIRouter(tags=["Web App"])
 BASE_DIR = Path(__file__).resolve().parent.parent
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
@@ -735,6 +747,7 @@ def sync_audit_report_to_library(request: Request, audit_date: str, db: Session,
 
 
 # ================= RUN AUDIT =================
+# ================= RUN AUDIT =================
 @router.post("/api/run-audit")
 async def run_audit(
     request: Request,
@@ -939,7 +952,7 @@ async def run_audit(
         ))
         db.commit()
 
-        # Sinkronkan laporan audit (abaikan jika write HTML lokal terblokir)
+        # Sinkronkan dokumen laporan audit HTML murni ke tab Perpustakaan
         try:
             sync_audit_report_to_library(request, audit_date, db)
             for aff_date in affected_dates:
@@ -962,7 +975,7 @@ async def run_audit(
     except Exception as exc:
         db.rollback()
         raise HTTPException(status_code=500, detail=f"Gagal memproses audit: {str(exc)}")
-
+    
 # ================= GENERATOR LAPORAN AUDIT HARIAN =================
 @router.get("/api/reports/daily-audit/{audit_date}", response_class=HTMLResponse)
 def generate_daily_audit_report(request: Request, audit_date: str, db: Session = Depends(get_db), auto_sync: bool = True):
@@ -1494,40 +1507,61 @@ def get_documents(db: Session = Depends(get_db)):
 
 @router.post("/api/documents/upload")
 async def upload_document(
+    request: Request,
     file: UploadFile = File(...),
-    doc_date: str = Form(...),
-    db: Session = Depends(get_db)
+    doc_date: str = Form(...)
 ):
+    db_name = extract_db_name_from_request(request) or "toko_1"
+    safe_schema = "".join(c for c in db_name if c.isalnum() or c in ("_", "-")).lower()
+
     ext = file.filename.split(".")[-1].upper() if "." in file.filename else "FILE"
     ftype = "PDF" if ext == "PDF" else ("CSV" if ext == "CSV" else ("HTML" if ext in ["HTML", "HTM"] else "OTHER"))
 
     safe_name = f"{doc_date}_{int(datetime.utcnow().timestamp())}_{file.filename}"
-    saved_path = DOCS_DIR / safe_name
     content = await file.read()
-    
-    # Abaikan penulisan disk jika berjalan di lingkungan serverless read-only
-    try:
-        saved_path.write_bytes(content)
-    except OSError:
-        pass
+    saved_path_str = f"data/documents/{safe_name}"
+
+    # Upload ke Supabase Storage Bucket
+    if supabase_client:
+        try:
+            storage_path = f"{safe_schema}/{safe_name}"
+            content_type = file.content_type or ("application/pdf" if ftype == "PDF" else "application/octet-stream")
+            supabase_client.storage.from_("audit-files").upload(
+                path=storage_path,
+                file=content,
+                file_options={"content-type": content_type, "upsert": "true"}
+            )
+            saved_path_str = supabase_client.storage.from_("audit-files").get_public_url(storage_path)
+        except Exception as e:
+            print(f"[Supabase Storage Error]: {e}")
+    else:
+        try:
+            (DOCS_DIR / safe_name).write_bytes(content)
+        except OSError:
+            pass
 
     size_kb = round(len(content) / 1024, 1)
-    extra = "1 halaman" if ftype == "PDF" else ("File Data" if ftype == "CSV" else "Laporan Audit Resmi")
+    extra = "1 halaman" if ftype == "PDF" else ("File Data" if ftype == "CSV" else "Laporan Audit")
 
-    new_doc = UploadedDocument(
-        filename=file.filename,
-        file_path=str(saved_path),
-        file_type=ftype,
-        file_size_kb=size_kb,
-        extra_info=extra,
-        doc_date=doc_date,
-        upload_time=datetime.now().strftime("%H:%M"),
-        status="Belum Diproses"
-    )
-    db.add(new_doc)
-    db.commit()
-    return {"status": "SUCCESS", "message": "Dokumen berhasil disimpan ke perpustakaan"}
+    session_factory = get_sessionmaker_for_db(db_name)
+    with session_factory() as tenant_db:
+        if "sqlite" not in str(tenant_db.bind.url):
+            tenant_db.execute(text(f'SET search_path TO "{safe_schema}", public'))
 
+        new_doc = UploadedDocument(
+            filename=file.filename,
+            file_path=saved_path_str,
+            file_type=ftype,
+            file_size_kb=size_kb,
+            extra_info=extra,
+            doc_date=doc_date,
+            upload_time=datetime.now().strftime("%H:%M"),
+            status="Belum Diproses"
+        )
+        tenant_db.add(new_doc)
+        tenant_db.commit()
+
+    return {"status": "SUCCESS", "message": "Dokumen berhasil disimpan ke database"}
 
 class EditDocumentPayload(BaseModel):
     doc_id: int
@@ -1571,22 +1605,18 @@ def delete_document(doc_id: int, db: Session = Depends(get_db)):
 
 @router.get("/api/documents/{doc_id}/download")
 def download_document(doc_id: int, request: Request, db: Session = Depends(get_db)):
-    doc = None
-    target_schema = None
-
-    # 1. Coba ambil dari schema tenant yang terdeteksi dari request
-    db_name = extract_db_name_from_request(request)
+    param_db = request.query_params.get("db")
+    req_db = param_db or extract_db_name_from_request(request)
     schemas_to_try = []
-    if db_name:
-        safe_curr = "".join(c for c in db_name if c.isalnum() or c in ("_", "-")).lower()
+    if req_db:
+        safe_curr = "".join(c for c in req_db if c.isalnum() or c in ("_", "-")).lower()
         schemas_to_try.append(safe_curr)
 
-    # Tambahkan fallback daftar schema umum jika parameter db tidak terbawa di URL
     for candidate in ["toko_3", "toko_2", "toko_1", "public"]:
         if candidate not in schemas_to_try:
             schemas_to_try.append(candidate)
 
-    # 2. Cari dokumen di schema-schema tersebut sampai ketemu
+    doc = None
     for sc in schemas_to_try:
         try:
             if "sqlite" not in str(db.bind.url):
@@ -1594,7 +1624,6 @@ def download_document(doc_id: int, request: Request, db: Session = Depends(get_d
             found = db.query(UploadedDocument).filter(UploadedDocument.id == doc_id).first()
             if found:
                 doc = found
-                target_schema = sc
                 break
         except Exception:
             continue
@@ -1602,45 +1631,33 @@ def download_document(doc_id: int, request: Request, db: Session = Depends(get_d
     if not doc:
         raise HTTPException(status_code=404, detail="Dokumen tidak ditemukan")
 
-    file_obj = Path(doc.file_path) if doc.file_path else None
-
-    # 3. Jika berkas fisik benar-benar ada di disk lokal, kirimkan langsung
-    if file_obj and file_obj.exists():
+    try:
         doc.status = "Terproses"
         db.commit()
+    except Exception:
+        db.rollback()
 
-        if (doc.file_type or "").upper() == "HTML":
-            return FileResponse(
-                path=str(file_obj), 
-                filename=doc.filename, 
-                media_type="text/html; charset=utf-8",
-                content_disposition_type="inline"
-            )
-        return FileResponse(
-            path=str(file_obj), 
-            filename=doc.filename, 
-            media_type="application/octet-stream"
-        )
+    file_path = doc.file_path or ""
 
-    # 4. Fallback Vercel: Render laporan audit langsung dari Supabase DailyAuditArchive
+    # 1. Jika URL Supabase Storage: redirect langsung
+    if file_path.startswith("http://") or file_path.startswith("https://"):
+        return RedirectResponse(url=file_path)
+
+    # 2. Jika berkas ada di disk lokal
+    file_obj = Path(file_path)
+    if file_obj.exists() and file_obj.is_file():
+        media_t = "application/pdf" if doc.filename.lower().endswith(".pdf") else "application/octet-stream"
+        return FileResponse(path=str(file_obj), filename=doc.filename, media_type=media_t)
+
+    # 3. Fallback dokumen HTML
     if (doc.file_type or "").upper() == "HTML" or (doc.filename or "").endswith(".html"):
-        date_match = re.search(r"\d{4}-\d{2}-\d{2}", doc.filename or doc.file_path or "")
+        date_match = re.search(r"\d{4}-\d{2}-\d{2}", doc.filename or file_path)
         audit_date = date_match.group(0) if date_match else None
-        
         if audit_date:
-            doc.status = "Terproses"
-            db.commit()
-            
             rep_response = generate_daily_audit_report(request, audit_date, db, auto_sync=False)
-            return HTMLResponse(
-                content=rep_response.body,
-                headers={"Content-Disposition": f'inline; filename="{doc.filename}"'}
-            )
+            return HTMLResponse(content=rep_response.body, headers={"Content-Disposition": f'inline; filename="{doc.filename}"'})
 
-    raise HTTPException(status_code=404, detail="Berkas file tidak ditemukan di sistem")
-class StatusTogglePayload(BaseModel):
-    status: str
-
+    raise HTTPException(status_code=404, detail=f"Berkas fisik '{doc.filename}' belum tersinkronisasi ke cloud storage.")
 
 @router.put("/api/documents/{doc_id}/status")
 def toggle_document_status(doc_id: int, payload: StatusTogglePayload, db: Session = Depends(get_db)):
