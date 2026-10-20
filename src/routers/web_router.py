@@ -2050,3 +2050,88 @@ def get_folder_files(request: Request, date_str: str):
             files_result[f.name] = {}
             
     return files_result
+
+# ================= INPUT MANUAL PIUTANG (ADMIN ONLY) =================
+class ManualReceivablePayload(BaseModel):
+    sale_date: str
+    customer_code: str
+    amount: float
+    sale_invoice: Optional[str] = None
+    notes: Optional[str] = ""
+    admin_operator: str = "admin"
+
+@router.post("/api/admin/receivables/manual")
+def add_manual_receivable(payload: ManualReceivablePayload, request: Request):
+    db_name = extract_db_name_from_request(request)
+    session_factory = get_sessionmaker_for_db(db_name)
+
+    with session_factory() as db:
+        if "sqlite" not in str(db.bind.url):
+            safe_name = "".join(c for c in db_name if c.isalnum() or c in ("_", "-")).lower() or DEFAULT_DB_KEY
+            db.execute(text(f'SET search_path TO "{safe_name}", public'))
+
+        # Validasi role admin di server
+        operator = db.query(User).filter(User.username == payload.admin_operator.strip().lower()).first()
+        if not operator or operator.role != "admin":
+            raise HTTPException(
+                status_code=403, 
+                detail="Akses ditolak! Fitur penambahan piutang manual khusus untuk peran Admin."
+            )
+
+        code_u = payload.customer_code.strip().upper()
+        if not code_u:
+            raise HTTPException(status_code=400, detail="Kode pelanggan wajib diisi!")
+        if payload.amount <= 0:
+            raise HTTPException(status_code=400, detail="Nominal utang harus lebih besar dari Rp 0!")
+
+        # 1. Cari atau buat master data pelanggan otomatis jika belum terdaftar
+        customer = db.query(Customer).filter(Customer.customer_code == code_u).first()
+        if not customer:
+            customer = Customer(
+                customer_code=code_u,
+                name=code_u,
+                address_raw="-",
+                address_clean="-"
+            )
+            db.add(customer)
+            db.flush()
+
+        # 2. Nomor faktur
+        inv_no = (
+            payload.sale_invoice.strip()
+            if payload.sale_invoice and payload.sale_invoice.strip()
+            else f"BON-MANUAL-{datetime.now().strftime('%d%m%y%H%M')}"
+        )
+
+        # 3. Simpan record piutang baru (format sama persis dengan tabel)
+        new_receivable = Receivable(
+            customer_id=customer.id,
+            sale_date=payload.sale_date,
+            sale_invoice=inv_no,
+            initial_amount=payload.amount,
+            remaining_amount=payload.amount,
+            status="BELUM_LUNAS"
+        )
+        if hasattr(new_receivable, "settlement_note"):
+            new_receivable.settlement_note = payload.notes or "Input Manual Admin"
+
+        db.add(new_receivable)
+        db.flush()
+
+        # 4. Catat jejak ke audit log
+        client_ip, client_loc, lat, lon = detect_client_info(request)
+        db.add(AuditActionLog(
+            username=operator.username,
+            action_type="MANUAL_RECEIVABLE_ADD",
+            description=f"Admin menambahkan piutang manual: {code_u} sebesar Rp {payload.amount:,.0f} (Faktur: {inv_no})",
+            client_ip=client_ip,
+            client_location=client_loc,
+            latitude=lat,
+            longitude=lon
+        ))
+        db.commit()
+
+    return {
+        "status": "SUCCESS",
+        "message": f"Piutang manual {code_u} sebesar Rp {payload.amount:,.0f} berhasil disimpan!"
+    }

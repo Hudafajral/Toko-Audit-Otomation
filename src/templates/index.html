@@ -438,7 +438,12 @@
             <h2 class="font-bold text-slate-200 text-sm flex items-center gap-2">
               <span>📋</span> Daftar Tagihan & Bon Pelanggan (Buku Piutang Terintegrasi)
             </h2>
-            <input type="text" id="searchDebts" onkeyup="filterDebtsTable()" placeholder="Cari Kode Pelanggan..." class="bg-slate-900 border border-slate-700 px-3.5 py-1.5 rounded-lg text-xs w-full sm:w-64 text-white focus:outline-none focus:border-indigo-500">
+            <div class="flex items-center gap-2 w-full sm:w-auto">
+              <input type="text" id="searchDebts" onkeyup="filterDebtsTable()" placeholder="Cari Kode Pelanggan..." class="bg-slate-900 border border-slate-700 px-3.5 py-1.5 rounded-lg text-xs w-full sm:w-60 text-white focus:outline-none focus:border-indigo-500">
+              <button type="button" id="btnAddManualDebt" onclick="openManualDebtModal()" class="hidden shrink-0 bg-indigo-600 hover:bg-indigo-500 text-white font-semibold text-xs px-3.5 py-1.5 rounded-lg shadow transition flex items-center gap-1.5 active:scale-95">
+                <span>➕</span> Tambah Piutang
+              </button>
+            </div>
           </div>
           <div class="overflow-x-auto max-h-[500px] custom-scroll border border-slate-800 rounded-xl">
             <table class="w-full text-left text-xs border-collapse">
@@ -1757,21 +1762,34 @@
       const roleTxt = document.getElementById('sidebarUserRole');
       const dbContainer = document.getElementById('dbSelectorContainer');
       const dbSelect = document.getElementById('activeDbSelect');
+      const btnAddDb = document.getElementById('btnAddDbModal');
+      const btnAddDebt = document.getElementById('btnAddManualDebt');
 
       if (currentUser) {
         nameTxt.innerText = currentUser.username;
         roleTxt.innerText = currentUser.role.toUpperCase();
 
-        if (currentUser.role === 'kasir') {
+        const isAdmin = (currentUser.role || '').toLowerCase() === 'admin';
+
+        // Sembunyikan tombol "+" Tambah Toko jika bukan admin
+        if (btnAddDb) {
+          if (isAdmin) btnAddDb.classList.remove('hidden');
+          else btnAddDb.classList.add('hidden');
+        }
+
+        // Sembunyikan tombol "+" Tambah Piutang jika bukan admin
+        if (btnAddDebt) {
+          if (isAdmin) btnAddDebt.classList.remove('hidden');
+          else btnAddDebt.classList.add('hidden');
+        }
+
+        if (!isAdmin) {
           const assigned = currentUser.assigned_tenant || 'toko_1';
           currentActiveDb = assigned;
           localStorage.setItem('active_tenant_db', assigned);
           if (dbSelect) dbSelect.value = assigned;
-
-          // Sembunyikan pemilih database agar kasir tidak gonta-ganti toko
           if (dbContainer) dbContainer.classList.add('hidden');
         } else {
-          // Tampilkan jika role adalah admin
           if (dbContainer) dbContainer.classList.remove('hidden');
         }
       }
@@ -2000,7 +2018,7 @@
     }
 
     async function downloadDocFile(docId) {
-      window.open(`/api/documents/${docId}/download`, '_blank');
+      window.open(`/api/documents/${docId}/download?db=${encodeURIComponent(currentActiveDb)}`, '_blank');
       setTimeout(() => { loadDocuments(); }, 1000);
     }
 
@@ -2278,6 +2296,93 @@
       const q = document.getElementById('searchDebts').value.toUpperCase();
       const filtered = debtsData.filter(d => (d["Kode / Nama Pelanggan"] || '').toUpperCase().includes(q));
       renderDebtsTable(filtered);
+    }
+
+    function openManualDebtModal() {
+      if (!currentUser || (currentUser.role || '').toLowerCase() !== 'admin') {
+        Swal.fire('Akses Ditolak', 'Hanya Admin yang berwenang menambahkan piutang manual!', 'error');
+        return;
+      }
+
+      const today = new Date().toISOString().split('T')[0];
+      
+      Swal.fire({
+        title: 'Input Piutang / Bon Manual',
+        html: `
+          <div class="text-left text-xs space-y-3">
+            <div>
+              <label class="block text-slate-400 mb-1">Tanggal Nota / Bon</label>
+              <input id="swalDebtDate" type="date" class="w-full bg-slate-900 border border-slate-700 rounded-lg p-2 text-white" value="${today}">
+            </div>
+            <div>
+              <label class="block text-slate-400 mb-1">Kode / Nama Pelanggan</label>
+              <input id="swalDebtCust" class="w-full bg-slate-900 border border-slate-700 rounded-lg p-2 text-white uppercase" placeholder="Contoh: PASADENA G 26 atau B9 7">
+            </div>
+            <div>
+              <label class="block text-slate-400 mb-1">Nomor Faktur / Nota (Opsional)</label>
+              <input id="swalDebtInv" class="w-full bg-slate-900 border border-slate-700 rounded-lg p-2 text-white" placeholder="Contoh: BON-01/10/26 (kosongkan untuk auto)">
+            </div>
+            <div>
+              <label class="block text-slate-400 mb-1">Total Bon (Nominal Rp)</label>
+              <input id="swalDebtAmount" type="number" min="1" step="any" class="w-full bg-slate-900 border border-slate-700 rounded-lg p-2 text-emerald-400 font-bold" placeholder="0">
+            </div>
+            <div>
+              <label class="block text-slate-400 mb-1">Catatan Tambahan (Opsional)</label>
+              <input id="swalDebtNote" class="w-full bg-slate-900 border border-slate-700 rounded-lg p-2 text-white" placeholder="Keterangan barang / nota">
+            </div>
+          </div>
+        `,
+        showCancelButton: true,
+        confirmButtonText: 'Simpan Piutang',
+        cancelButtonText: 'Batal',
+        confirmButtonColor: '#4f46e5',
+        focusConfirm: false,
+        preConfirm: () => {
+          const date = document.getElementById('swalDebtDate').value;
+          const cust = document.getElementById('swalDebtCust').value.trim().toUpperCase();
+          const amount = parseFloat(document.getElementById('swalDebtAmount').value);
+          const inv = document.getElementById('swalDebtInv').value.trim();
+          const note = document.getElementById('swalDebtNote').value.trim();
+
+          if (!date || !cust) {
+            Swal.showValidationMessage('Tanggal dan Kode Pelanggan wajib diisi!');
+            return false;
+          }
+          if (!amount || amount <= 0) {
+            Swal.showValidationMessage('Nominal utang harus lebih besar dari Rp 0!');
+            return false;
+          }
+
+          return {
+            sale_date: date,
+            customer_code: cust,
+            sale_invoice: inv || null,
+            amount: amount,
+            notes: note,
+            admin_operator: currentUser.username
+          };
+        }
+      }).then(async (result) => {
+        if (result.isConfirmed) {
+          try {
+            Swal.showLoading();
+            const res = await fetch('/api/admin/receivables/manual', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(result.value)
+            });
+            const d = await res.json();
+            if (res.ok) {
+              Swal.fire('Sukses', d.message, 'success');
+              await loadDashboardSummary();
+            } else {
+              Swal.fire('Gagal', d.detail || 'Gagal menyimpan piutang', 'error');
+            }
+          } catch (err) {
+            Swal.fire('Error', 'Terjadi kesalahan koneksi', 'error');
+          }
+        }
+      });
     }
 
     // CHECKBOX MUTASI BANK DI TAB REKONSILIASI MANUAL (DENGAN LABEL SISA TEBAL)
